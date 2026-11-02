@@ -8,9 +8,10 @@
 #define BG1_CONTROL_BUFFER MEM16(0x03002DA6)
 #define NATIVE_SCROLL_X MEM16(0x03003750)
 #define NATIVE_SCROLL_Y MEM16(0x03003754)
-#define TILE_WORDS 0x800
-#define MAP_BACKUP (BACKUP + 0x2000)
-#define PALETTE_BACKUP (BACKUP + 0x2800)
+#define TILE_WORDS 0x1000
+#define MAP_BACKUP (BACKUP + 0x4000)
+#define PALETTE_BACKUP (BACKUP + 0x4800)
+static void draw_arrow(MenuState *state, const CardGroup *group);
 
 static void enable_layer(void) {
     BG1_CONTROL_BUFFER = 0x1908; /* Separate character bank 2 preserves native HUD tiles. */
@@ -18,26 +19,33 @@ static void enable_layer(void) {
     MEM16(0x04000014) = NATIVE_SCROLL_X;
     MEM16(0x04000016) = NATIVE_SCROLL_Y;
     DISPLAY_BUFFER |= 0x0200;
-    DISPLAY_BUFFER &= ~0x1000; /* Hide native scan-screen decorations over list rows. */
     MEM16(0x04000000) = DISPLAY_BUFFER;
 }
 
 void menu_view_update(MenuState *state, const CardGroup *group) {
     /* Native VBlank gives BG1 the dialogue camera's scroll. Rotate the tilemap
        to keep the new panel fixed on screen without moving native backgrounds. */
-    u32 variant = (u32)state->selected * 3;
+    u32 page_index = state->selected >> 3;
+    const MenuPage *page = &group->pages[page_index];
+    u32 variant = (u32)(state->selected & 7) * 3;
     if (state->confirming) variant += 1 + state->choice;
-    const u16 *source = group->maps + (variant << 10);
-    copy_words((const u8 *)group->font + (variant << 13), TILE_VRAM, TILE_WORDS);
+    const u16 *source = page->maps + (variant << 10);
+    if (state->loaded_page != page_index) {
+        copy_words(page->font, TILE_VRAM, TILE_WORDS);
+        state->loaded_page = page_index;
+    }
     volatile u16 *destination = (volatile u16 *)MAP_VRAM;
     u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
     for (y=0; y<32; ++y)
         for (x=0; x<32; ++x)
             destination[(((y+sy)&31)<<5) + ((x+sx)&31)] = source[(y<<5)+x];
     enable_layer();
+    draw_arrow(state, group);
 }
 
 void menu_view_open(MenuState *state, const CardGroup *group) {
+    state->animation = 0;
+    state->loaded_page = 255;
     state->bg1_control = BG1_CONTROL_BUFFER;
     state->bg1_x = NATIVE_SCROLL_X;
     state->bg1_y = NATIVE_SCROLL_Y;
@@ -64,4 +72,24 @@ void menu_view_close(MenuState *state) {
     DISPLAY_BUFFER |= state->sprites_enabled;
     MEM16(0x04000000) = DISPLAY_BUFFER;
     state->active = 0;
+}
+
+/* The original list's 22-frame horizontal arrow cycle, captured from native OAM.
+   Each value chooses the same original arrow shifted from x=223 through x=226. */
+static void draw_arrow(MenuState *state, const CardGroup *group) {
+    static const u8 motion[22] = {1,2,2,2,3,3,3,3,3,3,3,2,2,1,1,1,0,0,0,0,0,1};
+    if (group->count > 8) {
+        const MenuPage *page = &group->pages[state->selected >> 3];
+        const u16 *source = page->arrows + motion[state->animation] * 6;
+        volatile u16 *destination = (volatile u16 *)MAP_VRAM;
+        u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
+        for (y=0; y<2; ++y)
+            for (x=0; x<3; ++x)
+                destination[(((8+y+sy)&31)<<5) + ((27+x+sx)&31)] = source[y*3+x];
+    }
+}
+
+void menu_view_tick(MenuState *state, const CardGroup *group) {
+    if (++state->animation == 22) state->animation = 0;
+    draw_arrow(state, group);
 }

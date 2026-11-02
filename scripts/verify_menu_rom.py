@@ -32,7 +32,7 @@ def parity(e, group, name):
     """Run exactly the same behavior contract against each applicable list."""
     progress=e.read(0x03002A60,0x31C)
     flash=e.savedata()
-    vram=[e.read(a,n) for a,n in ((0x06008000,0x2000),(0x0600C800,0x800),(0x050001C0,32))]
+    vram=[e.read(a,n) for a,n in ((0x06008000,0x4000),(0x0600C800,0x800),(0x050001C0,32))]
     native_tiles=e.read(0x06000000,0x8000)
     native_hud_palette=e.read(0x050001E0,32)
     previous_id=e.number(0x030039FA,2)
@@ -74,7 +74,7 @@ def parity(e, group, name):
     assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash
     e.press('B',120)
     assert e.state().get('substate')==2 and menu_state(e)[0]==0
-    for before,(address,size) in zip(vram,((0x06008000,0x2000),(0x0600C800,0x800),(0x050001C0,32))):
+    for before,(address,size) in zip(vram,((0x06008000,0x4000),(0x0600C800,0x800),(0x050001C0,32))):
         assert e.read(address,size)==before, f'Menu failed to restore video memory at {address:08x}'
     assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash
     open_menu(e,group,hold=False)
@@ -100,6 +100,8 @@ def confirm_selected(e):
     e.press('A',10)
     assert confirmation_state(e)==[1,0] and menu_state(e)[0]==1
     assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash, 'Selecting a card applied it before Yes'
+    state=menu_state(e)
+    e.screenshot(f'scan-confirm-{state[3]}-{state[1]}.png')
     e.press('A',10)
     assert menu_state(e)[0]==0
 
@@ -184,7 +186,7 @@ def run_context(core,rom,artifacts,world_e=False):
         life_address=0x03003A48 if world_e else 0x03002A6A
         lives=e.number(life_address,2)
         inventory=e.inventory()
-        select_card(e,0,1)
+        select_card(e,0,0)
         e.until(lambda s:e.number(life_address,2)==lives+5)
         assert e.inventory()==inventory
         e.screenshot('five-up-granted.png')
@@ -192,6 +194,7 @@ def run_context(core,rom,artifacts,world_e=False):
         power_prompt(e)
         e.press('A',120)
         assert menu_state(e)==[1,0,1,0] and e.number(life_address,2)==lives+5
+        e.press('Down',30)
         confirm_selected(e)
         e.run(300)
         assert e.inventory()==ITEMS+bytes(26)

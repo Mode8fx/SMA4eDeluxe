@@ -10,12 +10,14 @@ typedef unsigned int u32;
 #define BUTTONS_PRESSED MEM16(0x03002DBE)
 
 typedef struct { const u8 *payload; const u8 *transfer; } Card;
-typedef struct { const Card *cards; u32 count; const u16 *maps; const void *font; } CardGroup;
+typedef struct { const void *font; const u16 *maps; const u16 *arrows; } MenuPage;
+typedef struct { const Card *cards; u32 count; const MenuPage *pages; } CardGroup;
 typedef struct {
     u8 active, selected, armed, group;
     u16 bg1_control, bg1_x, bg1_y, bg1_enabled;
     u8 confirming, choice;
     u16 sprites_enabled;
+    u8 animation, loaded_page;
 } MenuState;
 /* Appended to the native communication object; native allocation/clear are extended. */
 #define MENU_STATE(screen) ((MenuState *)((u8 *)(screen) + 0x1F4))
@@ -29,4 +31,5 @@ static inline void copy_words(const void *source, void *dest, u32 words) {
 void menu_view_open(MenuState *state, const CardGroup *group);
 void menu_view_update(MenuState *state, const CardGroup *group);
 void menu_view_close(MenuState *state);
+void menu_view_tick(MenuState *state, const CardGroup *group);
 #endif

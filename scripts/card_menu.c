@@ -54,6 +54,7 @@ void card_menu_tick(void *screen) {
         return; /* Opening OK can never activate a card. */
     }
     group = &groups[state->group];
+    menu_view_tick(state, group);
     if (!state->armed) {
         if (!(BUTTONS_HELD & 0xF3)) state->armed = 1;
         return;
@@ -88,6 +89,13 @@ void card_menu_tick(void *screen) {
     selected = state->selected;
     if (BUTTONS_PRESSED & 0x40) selected = selected ? selected - 1 : group->count - 1;
     else if (BUTTONS_PRESSED & 0x80) selected = selected + 1 < group->count ? selected + 1 : 0;
+    else if ((BUTTONS_PRESSED & 0x30) && group->count > 8) {
+        u32 page = selected >> 3, last = (group->count - 1) >> 3;
+        if (BUTTONS_PRESSED & 0x10) page = page < last ? page + 1 : 0;
+        else page = page ? page - 1 : last;
+        selected = (page << 3) + (selected & 7);
+        if (selected >= group->count) selected = group->count - 1;
+    }
     if (selected != state->selected) {
         state->selected = selected;
         sound(0x45);
@@ -99,5 +107,21 @@ void card_menu_tick(void *screen) {
         state->armed = 0;
         sound(5);
         menu_view_update(state, group);
+    }
+}
+
+/* Keep the native banner. Hide only the e-Reader illustration while browsing,
+   after native OAM generation. The native renderer regenerates it on exit. */
+void menu_scene_tick(void) {
+    ((void (*)(void))0x080C4AC9)();
+    if (MEM8(0x03003774) == 0x4F) {
+        void *screen = *(void **)0x030075E0;
+        if (MENU_STATE(screen)->active) {
+            volatile u16 *oam = (volatile u16 *)0x03002DC8;
+            u32 i, count = MEM8(0x03003781);
+            for (i = 0; i < count; ++i)
+                if ((oam[i*4+2] & 0xF000) == 0x3000)
+                    oam[i*4] |= 0x0200;
+        }
     }
 }
