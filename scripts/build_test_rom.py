@@ -1,4 +1,4 @@
-"""Build fixed Power-Up and Demo Card experiments. Python 3; no assembler required."""
+"""Build the shared menu by default; --direct-load retains the earlier fixed-card tests."""
 
 import argparse
 import hashlib
@@ -268,4 +268,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--power-up-only" in sys.argv or "--direct-load" in sys.argv:
+        if "--direct-load" in sys.argv: sys.argv.remove("--direct-load")
+        main()
+    else:
+        from build_menu_rom import main as build_menu
+        build_menu()
