@@ -6,6 +6,38 @@ remain in the shared C controller.
 import struct
 
 MAX_NAME_LENGTH = 32
+DESCRIPTION_COLOR = 9
+CARD_DESCRIPTIONS = {
+    '4-Item Set': 'One of each standard item.',
+    '3-Suit Set': 'One of each suit.',
+    '8-Item Set': '4-Item + 3-Suit + P-Wing',
+    '10-Item Set': '8-Item + Cape Feather + Boomerang',
+    'Blue Switch': '1-Up Mushrooms turn into 3-Up Moons.',
+    'Orange Switch': 'Fireballs turn enemies into coins.',
+    'Blue-Green Switch': '(Main game only) Adds grass and turnips to levels.',
+    'Yellow Switch': '(Main game only) Gives Luigi different physics and fireballs.',
+    'Green Switch': '(World-e only) Slows down time limit and music early in a level.',
+    'Cyan Switch': '(World-e only) Cuts P-Meter in half.',
+    'Red Switch': 'Harder enemies, more damage, 2x boss health, 2x score.',
+}
+
+
+def description_lines(card, font):
+    if card['folder'] not in ('Power-Up', 'Switch'): return []
+    # The source filename spells this colour with a space.
+    name = card['name'].replace('Blue Green Switch', 'Blue-Green Switch')
+    text = CARD_DESCRIPTIONS.get(name, '')
+    lines = []
+    for word in text.split():
+        candidate = f'{lines[-1]} {word}' if lines else word
+        if lines and len(candidate) <= 35 and font.width(candidate) <= 176:
+            lines[-1] = candidate
+        else:
+            if len(word) > 35 or font.width(word) > 176:
+                raise ValueError(f'Description word does not fit: {word}')
+            lines.append(word)
+    if len(lines) > 2: raise ValueError(f'Description exceeds two lines: {name}')
+    return lines
 
 
 def lz77(rom, offset):
@@ -40,7 +72,14 @@ class NativeFont:
         if 'A' <= char <= 'Z': code = ord(char)-ord('A')
         elif 'a' <= char <= 'z': code = ord(char)-ord('a')+0x20
         elif '0' <= char <= '9': code = ord(char)-ord('0')+(0xEE if small else 0x76)
-        elif char in " -?'.": code = {' ':0xE3,'-':0xE2,'?':0xE0,"'":0x1C,'.':0x1E}[char]
+        elif char in " -?'.,": code = {' ':0xE3,'-':0xE2,'?':0xE0,"'":0x1C,'.':0x1E,',':0x1D}[char]
+        elif char in '()+':
+            # These symbols have no glyph in this native font. Match its pixel
+            # weight and eight-pixel height without substituting another font.
+            rows = {'(':('0110','1100','1100','1100','1100','1100','0110','0000'),
+                    ')':('1100','0110','0110','0110','0110','0110','1100','0000'),
+                    '+':('000000','001100','001100','111111','111111','001100','001100','000000')}[char]
+            return len(rows[0]), [[int(pixel) for pixel in row] for row in rows]
         elif char == ':':
             # Two copies of the native full stop's 2-pixel dot.
             return 3, [[int(x<2 and y in (2,3,5,6)) for x in range(3)] for y in range(8)]
@@ -92,7 +131,7 @@ def cursor(canvas,x,y):
 # Palette indices 1/2/3/13/14/15 retain the native frame's meanings.
 # These are its displayed BGR555 colours, including the game's palette adjustment.
 COLORS = [0,0x7FFF,0,0x6F7B,0x1A5F,0x233F,0x27DF,0x001F,
-          0x030E,0x7BFF,0x4210,rgb(0,160,0),rgb(216,0,0),0x6DE5,0x7F72,0x7FB5]
+          0x030E,rgb(0,64,224),0x4210,rgb(0,160,0),rgb(216,0,0),0x6DE5,0x7F72,0x7FB5]
 
 
 def tile_pixel(graphics, tile, x, y):
@@ -171,14 +210,19 @@ def list_canvas(group, selected, font, frame):
     return canvas
 
 
-def confirmation(canvas, choice, font, frame, name):
-    frame.communication_box(canvas,24,44,216,104)
+def confirmation(canvas, choice, font, frame, card):
+    lines = description_lines(card, font)
+    top = 44 - (11*len(lines))//2
+    frame.communication_box(canvas,24,top,216,top+60+11*len(lines))
     prompt='Scan this card?'
-    font.draw(canvas,(240-font.width(prompt))//2,53,prompt)
-    font.draw(canvas,(240-font.width(name))//2,66,name)
-    font.draw(canvas,78,85,'Yes',color=2 if choice==0 else 10)
-    font.draw(canvas,143,85,'No',color=2 if choice==1 else 10)
-    cursor(canvas,65 if choice==0 else 130,84)
+    font.draw(canvas,(240-font.width(prompt))//2,top+9,prompt)
+    font.draw(canvas,(240-font.width(card['name']))//2,top+22,card['name'])
+    for i,line in enumerate(lines):
+        font.draw(canvas,(240-font.width(line))//2,top+35+11*i,line,color=DESCRIPTION_COLOR)
+    buttons = top+41+11*len(lines)
+    font.draw(canvas,78,buttons,'Yes',color=2 if choice==0 else 10)
+    font.draw(canvas,143,buttons,'No',color=2 if choice==1 else 10)
+    cursor(canvas,65 if choice==0 else 130,buttons-1)
 
 
 def make_assets(groups, rom):
@@ -186,6 +230,7 @@ def make_assets(groups, rom):
     frame=NativeFrame(rom)
     pages=[]
     metrics=[]
+    popup_metrics=[]
     status_glyphs=bytearray()
     for label,color in (('ON',11),('OFF',12),('N/A',2)):
         canvas=[[0]*24 for _ in range(8)]
@@ -197,7 +242,7 @@ def make_assets(groups, rom):
         for first in range(0,len(group['cards']),8):
             tiles=[bytes(32)]
             tile_ids={tiles[0]:0}
-            def cell(canvas,tx,ty):
+            def cell(canvas,tx,ty,tiles=tiles,tile_ids=tile_ids):
                 tile=bytes(canvas[ty*8+y][tx*8+x] | canvas[ty*8+y][tx*8+x+1]<<4
                            for y in range(8) for x in range(0,8,2))
                 if tile not in tile_ids:
@@ -205,13 +250,27 @@ def make_assets(groups, rom):
                     tiles.append(tile)
                 return tile_ids[tile] | 0xE000
             maps=[]
+            confirmation_fonts=[]
+            confirmation_arrows=[]
             for selected in range(first,min(first+8,len(group['cards']))):
+                popup_tiles=[bytes(32)]
+                popup_ids={popup_tiles[0]:0}
                 for mode in range(3):
                     canvas=list_canvas(group,selected,font,frame)
                     if len(group['cards'])>8:frame.sprite(canvas,224,65,0x1D,16,True)
-                    if mode:confirmation(canvas,mode-1,font,frame,group['cards'][selected]['name'])
-                    maps.append(struct.pack('<1024H',*(cell(canvas,x,y)
+                    if mode:confirmation(canvas,mode-1,font,frame,group['cards'][selected])
+                    maps.append(struct.pack('<1024H',*((cell(canvas,x,y,popup_tiles,popup_ids)
+                                if mode else cell(canvas,x,y))
                                 for y in range(32) for x in range(32))))
+                for x in range(223,227):
+                    canvas=list_canvas(group,selected,font,frame)
+                    confirmation(canvas,0,font,frame,group['cards'][selected])
+                    if len(group['cards'])>8:frame.sprite(canvas,x,65,0x1D,16,True)
+                    confirmation_arrows.extend(cell(canvas,tx,ty,popup_tiles,popup_ids)
+                                               for ty in range(8,10) for tx in range(27,30))
+                if len(popup_tiles)>512:raise ValueError(f'Confirmation exceeds 512 tiles: {len(popup_tiles)}')
+                popup_metrics.append(len(popup_tiles))
+                confirmation_fonts.append(b''.join(popup_tiles).ljust(0x4000,b'\0'))
             arrows=[]
             for x in range(223,227):
                 canvas=list_canvas(group,first,font,frame)
@@ -224,7 +283,8 @@ def make_assets(groups, rom):
                               for ty in range(3,14) for tx in range(22,25)
                               for y in range(8) for x in range(0,8,2))
             group_pages.append({'font':graphics.ljust(0x4000,b'\0'),
-                                'maps':b''.join(maps),'arrows':struct.pack('<24H',*arrows),
+                                'confirmation_fonts':b''.join(confirmation_fonts),
+                                'maps':b''.join(maps),'arrows':struct.pack(f'<{len(arrows)+len(confirmation_arrows)}H',*arrows,*confirmation_arrows),
                                 'status_base':status_base})
             metrics.append(len(tiles))
         pages.append(group_pages)
@@ -234,6 +294,10 @@ def make_assets(groups, rom):
         'arrow_graphics_rom_offset':'0x239b70','arrow_cycle_frames':22,
         'confirmation_frame_graphics_rom_offset':'0x23f48c',
         'confirmation_includes_card_name':True,
+        'confirmation_graphics':'Separate 16 KiB bank per card, shared by Yes/No',
+        'confirmation_tiles_per_card':popup_metrics,
+        'confirmation_descriptions':{'color':'blue','max_line_length':35,'max_lines':2,
+                                    'text':CARD_DESCRIPTIONS},
         'tiles_per_page':metrics,'rows':8,'variants_per_card':3,
         'columns':['filename ID',f'filename name (up to {MAX_NAME_LENGTH} characters)','region (JPN/USA, black)'],
         'max_name_length':MAX_NAME_LENGTH,

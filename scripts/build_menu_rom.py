@@ -157,7 +157,7 @@ def build(rom, output, compiler, catalog=None):
     for group_id,(group,group_pages) in enumerate(zip(groups,pages)):
         page_descriptors=bytearray()
         for page in group_pages:
-            page_descriptors+=struct.pack('<IIII',allocate(page['font']),allocate(page['maps']),allocate(page['arrows']),allocate(page['status_base']))
+            page_descriptors+=struct.pack('<IIIII',allocate(page['font']),allocate(page['maps']),allocate(page['arrows']),allocate(page['status_base']),allocate(page['confirmation_fonts']))
         pages_address=allocate(page_descriptors)
         group['pages_address']=hex(pages_address)
         group['page_count']=len(group_pages)

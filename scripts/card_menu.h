@@ -10,14 +10,14 @@ typedef unsigned int u32;
 #define BUTTONS_PRESSED MEM16(0x03002DBE)
 
 typedef struct { const u8 *payload; const u8 *transfer; } Card;
-typedef struct { const void *font; const u16 *maps; const u16 *arrows; const void *status_base; } MenuPage;
+typedef struct { const void *font; const u16 *maps; const u16 *arrows; const void *status_base; const u8 *confirmation_fonts; } MenuPage;
 typedef struct { const Card *cards; u32 count; const MenuPage *pages; } CardGroup;
 typedef struct {
     u8 active, selected, armed, group;
     u16 bg1_control, bg1_x, bg1_y, bg1_enabled;
     u8 confirming, choice;
     u16 sprites_enabled;
-    u8 animation, loaded_page;
+    u8 animation, loaded_bank;
     u8 status_flags, status_valid;
 } MenuState;
 _Static_assert(sizeof(MenuState) == 20, "Menu state must fit the extended object");

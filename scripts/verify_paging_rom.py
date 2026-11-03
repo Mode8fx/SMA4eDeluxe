@@ -17,7 +17,7 @@ MOTION = [1,2,2,2,3,3,3,3,3,3,3,2,2,1,1,1,0,0,0,0,0,1]
 
 def animation_state(e):
     screen=e.number(0x030075E0,4)
-    return list(e.read(screen+0x204,2))  # animation, loaded page.
+    return list(e.read(screen+0x204,2))  # animation, loaded graphics bank.
 
 
 def banner(e):
@@ -76,9 +76,23 @@ def check_list(e,group,name):
     assert menu_state(e)[1]==17
     e.press('A',10)
     assert confirmation_state(e)==[1,0]
+    assert animation_state(e)[1]==16+17
+    # A confirmation has its own tile numbering and corresponding arrow maps.
+    popup_arrows=e.number(pages+2*20+8,4)+(1+(17%8))*48
+    samples=[]
+    for _ in range(44):
+        phase=e.number(screen+0x204)
+        expected=e.read(popup_arrows+MOTION[phase]*12,12)
+        actual=b''.join(e.read(0x0600C800+((((8+y+sy)&31)*32+(27+x+sx)%32)*2),2)
+                        for y in range(2) for x in range(3))
+        assert actual==expected, (phase,actual.hex(),expected.hex())
+        samples.append(actual)
+        e.run(1)
+    assert samples[:22]==samples[22:] and len(set(samples))==4
     e.screenshot(name+'-last-page-confirm.png')
     e.press('B',10)
     assert menu_state(e)[1]==17 and confirmation_state(e)[0]==0
+    assert animation_state(e)[1]==2
     e.press('A',10);e.press('Right',10);e.press('A',10)
     assert menu_state(e)[1]==17 and confirmation_state(e)[0]==0
     assert banner(e)==native_banner
@@ -102,6 +116,7 @@ def check_list(e,group,name):
         e.until(lambda state:state['state']==back_state,limit=30000)
     return {'group':group,'pages':3,'rows':18,'arrow_period':22,
             'arrow_positions':4,'native_banner_preserved':True,
+            'confirmation_arrow_bank_verified':True,
             'last_page_activated_id':expected_id,'passed':True}
 
 

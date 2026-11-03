@@ -8,7 +8,7 @@ from pathlib import Path
 from build_menu_rom import GROUP_CATALOG, decoded_card
 from build_test_rom import ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, ITEMS, sha256
 from verify_test_rom import Emulator, boot_to_file_select
-from menu_style import NativeFont
+from menu_style import NativeFont, description_lines, DESCRIPTION_COLOR
 
 
 def menu_state(e):
@@ -54,6 +54,29 @@ def highlight(e,index):
     for _ in range(index%8):e.press('Down',5)
 
 
+def assert_confirmation_description(e,card):
+    """Check displayed tile pixels and blue palette after the bank switch."""
+    font=NativeFont((ROOT/'original_roms'/ROM_NAME).read_bytes())
+    lines=description_lines(card,font)
+    top=44-(11*len(lines))//2
+    sx=(e.number(0x03003750,2)>>3)&31
+    sy=(e.number(0x03003754,2)>>3)&31
+    for i,line in enumerate(lines):
+        assert len(line)<=35
+        expected=[[0]*240 for _ in range(8)]
+        font.draw(expected,(240-font.width(line))//2,0,line,color=DESCRIPTION_COLOR)
+        for row in range(8):
+            y=top+35+11*i+row
+            for x in range(24,216):
+                cell=e.number(0x0600C800+((((y//8+sy)&31)*32)+((x//8+sx)&31))*2,2)
+                address=0x06008000+(cell&1023)*32+(y%8)*4+(x%8)//2
+                pixel=(e.number(address)>>(4*(x%2)))&15
+                assert (pixel==DESCRIPTION_COLOR)==(expected[row][x]==DESCRIPTION_COLOR), (card['name'],line,x,y,pixel)
+    if lines:
+        palette=e.number(0x050001C0+DESCRIPTION_COLOR*2,2)
+        assert palette&31==0 and (palette>>10)>((palette>>5)&31), hex(palette)
+
+
 def parity(e, group, name):
     """Visit every real row/page and confirmation, preserving native video/state."""
     cards=GROUP_CATALOG[group]['cards']
@@ -88,10 +111,12 @@ def parity(e, group, name):
         e.run(5,'A')
         assert confirmation_state(e)==[1,0] and menu_state(e)[2]==0
         e.run(5)
+        assert_confirmation_description(e,card)
         e.screenshot(f'{name}-confirm-{i:02}.png')
+        e.press('Right',5)
+        assert confirmation_state(e)==[1,1]
+        assert_confirmation_description(e,card)
         if i==0:
-            e.press('Right',5)
-            assert confirmation_state(e)==[1,1]
             e.press('A',5)
         else:e.press('B',5)
         assert menu_state(e)==[1,i,1,group] and confirmation_state(e)[0]==0
@@ -279,6 +304,7 @@ def run_context(core,rom,artifacts,world_e=False):
         return {'passed':True,'frames':e.frames,'powerups':rewards,'demos':demos,
                 'checks':['every row and confirmation in each context','all real page boundaries and wrap',
                           'held buttons cannot select/confirm twice','No and B preserve row/page',
+                          'blue descriptions render completely for both Yes/No choices',
                           'native video restored on cancellation','all applicable Power-Up rewards',
                           'Switch ON/OFF rendered colours and repeat updates','N/A visible and scan attempt allowed',
                           'compatible Switch toggles ON then OFF','100-Up promotional type 2',

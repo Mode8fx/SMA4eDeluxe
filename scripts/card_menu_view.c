@@ -32,9 +32,15 @@ void menu_view_update(MenuState *state, const CardGroup *group) {
     u32 variant = (u32)(state->selected & 7) * 3;
     if (state->confirming) variant += 1 + state->choice;
     const u16 *source = page->maps + (variant << 10);
-    if (state->loaded_page != page_index) {
-        copy_words(page->font, TILE_VRAM, TILE_WORDS);
-        state->loaded_page = page_index;
+    /* List pages and each card's confirmation use independent tile banks.
+       The Yes/No maps share a bank, so switching answers needs no tile upload. */
+    u32 bank = state->confirming ? 16 + state->selected : page_index;
+    if (state->loaded_bank != bank) {
+        const void *font = state->confirming
+            ? page->confirmation_fonts + ((u32)(state->selected & 7) << 14)
+            : page->font;
+        copy_words(font, TILE_VRAM, TILE_WORDS);
+        state->loaded_bank = bank;
     }
     volatile u16 *destination = (volatile u16 *)MAP_VRAM;
     u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
@@ -50,7 +56,7 @@ void menu_view_update(MenuState *state, const CardGroup *group) {
 void menu_view_open(MenuState *state, const CardGroup *group) {
     state->animation = 0;
     state->status_valid = 0;
-    state->loaded_page = 255;
+    state->loaded_bank = 255;
     state->bg1_control = BG1_CONTROL_BUFFER;
     state->bg1_x = NATIVE_SCROLL_X;
     state->bg1_y = NATIVE_SCROLL_Y;
@@ -85,7 +91,8 @@ static void draw_arrow(MenuState *state, const CardGroup *group) {
     static const u8 motion[22] = {1,2,2,2,3,3,3,3,3,3,3,2,2,1,1,1,0,0,0,0,0,1};
     if (group->count > 8) {
         const MenuPage *page = &group->pages[state->selected >> 3];
-        const u16 *source = page->arrows + motion[state->animation] * 6;
+        u32 bank = state->confirming ? 1 + (state->selected & 7) : 0;
+        const u16 *source = page->arrows + bank * 24 + motion[state->animation] * 6;
         volatile u16 *destination = (volatile u16 *)MAP_VRAM;
         u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
         for (y=0; y<2; ++y)
