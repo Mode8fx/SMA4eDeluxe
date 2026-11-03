@@ -1,7 +1,7 @@
 """Input-only integration checks for the separate 18-row paging fixture.
 
 Build it with: python scripts/build_test_rom.py --paging-test
-It repeats the existing six cards; the normal output still contains only six.
+It repeats the first two applicable cards per group; the normal output uses all BINs.
 """
 import argparse
 import json
@@ -31,8 +31,8 @@ def check_list(e,group,name):
     before=e.read(0x03002A60,0x31C)
     flash=e.savedata()
     native_banner=banner(e)
-    assert len(native_banner)==(4 if group==0 else 3), native_banner
-    old_vram=e.read(0x06008000,0x4000)
+    assert len(native_banner)==(4 if group in (0,3) else 3), native_banner
+    old_vram=e.read(0x06008000,0x4800)
     old_map=e.read(0x0600C800,0x800)
     open_menu(e,group)
     assert banner(e)==native_banner, 'Native banner changed or disappeared'
@@ -85,7 +85,7 @@ def check_list(e,group,name):
     assert e.read(0x03002A60,0x31C)==before and e.savedata()==flash
     e.press('B',120)
     assert menu_state(e)[0]==0 and e.state()['substate']==2
-    assert e.read(0x06008000,0x4000)==old_vram
+    assert e.read(0x06008000,0x4800)==old_vram
     assert e.read(0x0600C800,0x800)==old_map
     open_menu(e,group,hold=False)
     assert menu_state(e)[1]==0 and animation_state(e)[1]==0
@@ -96,7 +96,7 @@ def check_list(e,group,name):
     confirm_selected(e)
     assert e.number(0x030039FA,2)==expected_id, 'Wrong card activated from final page'
     back_state=0x11 if e.number(0x03003DCF)&0x40 else 0x4C
-    if group==0:finish_power(e,back_state)
+    if group in (0,3):finish_power(e,back_state)
     else:
         e.until(lambda state:state['state']==0x1A)
         e.until(lambda state:state['state']==back_state,limit=30000)
@@ -115,7 +115,7 @@ def run_context(core,rom,artifacts,world_e):
         else:
             for _ in range(2):e.press('A',300)
         result=[]
-        for powerup,group in ((True,0),(False,2 if world_e else 1)):
+        for powerup,group in ((True,3 if world_e else 0),(False,2 if world_e else 1)):
             e.press('R')
             # Normal R popup remembers Power-Up; World-e always resets to Demo.
             if powerup or not world_e:e.press('Down')

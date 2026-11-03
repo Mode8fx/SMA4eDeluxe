@@ -8,10 +8,10 @@ import struct
 
 ROOT = Path(__file__).resolve().parents[1]
 ROM_NAME = "Super Mario Advance 4 - Super Mario Bros. 3 (USA) (Rev 1) (Virtual Console).gba"
-CARD_NAME = "[Japan] [25] 10-Item Set.bin"
-DEMO_NAME = "[Japan] [16] W8-Fortress Speed Stage.bin"
+CARD_NAME = "[Japan] [21] 10-Item Set.bin"
+DEMO_NAME = "[Japan] [16] W8-Fortress_ Speed Stage.bin"
 DEMO_SHA256 = "34d4257ed813cba5acc5d6dae82585e2c3c3219221c3819b7d9739215697cd26"
-WORLD_E_DEMO_NAME = "[Japan] [102] Bombarded by Bob-ombs All Coins.bin"
+WORLD_E_DEMO_NAME = "[Japan] [2] Bombarded by Bob-ombs_ All Coins.bin"
 WORLD_E_DEMO_SHA256 = "f513f2cf16c11da26fe93b739cf11278f5fecbddaa85760717a252ba13cacd18"
 ROM_SHA256 = "c8db146071462572b3be6d2caefe453c584547515f9a2e3e75264cdf9243442e"
 BASE = 0x08000000

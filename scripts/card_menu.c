@@ -44,7 +44,8 @@ void card_menu_tick(void *screen) {
     }
     if (!state->active) {
         if (MEM8((u8 *)((void **)screen)[1] + 8) != 0) return;
-        state->group = category == 0x20 ? 0 : ((MEM8(0x03003DCF) & 0x40) ? 1 : 2);
+        state->group = category == 0x20 ? ((MEM8(0x03003DCF) & 0x40) ? 0 : 3)
+                                       : ((MEM8(0x03003DCF) & 0x40) ? 1 : 2);
         state->selected = 0;
         state->armed = 0;
         state->active = 1;

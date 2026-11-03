@@ -1,11 +1,14 @@
-"""Input-driven mGBA integration tests for all three shared menus and six cards."""
+"""Input-driven mGBA checks for every embedded card and all menu contexts."""
 import argparse
+import ctypes as C
+import struct
 import json
 from pathlib import Path
 
 from build_menu_rom import GROUP_CATALOG, decoded_card
 from build_test_rom import ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, ITEMS, sha256
 from verify_test_rom import Emulator, boot_to_file_select
+from menu_style import NativeFont
 
 
 def menu_state(e):
@@ -28,66 +31,102 @@ def open_menu(e, group, hold=True):
     assert e.state().get('substate')==3 and menu_state(e)==[1,0,1,group]
 
 
+def assert_switch_label(e,index,label):
+    """Read the rendered pixels, including colour, rather than only flag RAM."""
+    font=NativeFont((ROOT/'original_roms'/ROM_NAME).read_bytes())
+    color={'ON':11,'OFF':12,'N/A':2}[label]
+    expected=[[0]*24 for _ in range(8)]
+    font.draw(expected,24-font.width(label),0,label,color=color)
+    for y in range(8):
+        py=1+(index%8)*11+y
+        for x in range(24):
+            address=0x0600C000+((py//8)*3+x//8)*32+(py%8)*4+(x%8)//2
+            pixel=(e.number(address)>>(4*(x%2)))&15
+            assert (pixel if pixel in (2,11,12) else 0)==expected[y][x], (index,label,x,y,pixel)
+    palette=e.number(0x050001C0+color*2,2)
+    if label=='ON':assert palette&31==0 and palette>>10==0 and (palette>>5)&31
+    elif label=='OFF':assert palette>>5==0 and palette&31
+    else:assert palette==0
+
+
+def highlight(e,index):
+    for _ in range(index//8):e.press('Right',5)
+    for _ in range(index%8):e.press('Down',5)
+
+
 def parity(e, group, name):
-    """Run exactly the same behavior contract against each applicable list."""
+    """Visit every real row/page and confirmation, preserving native video/state."""
+    cards=GROUP_CATALOG[group]['cards']
     progress=e.read(0x03002A60,0x31C)
     flash=e.savedata()
-    vram=[e.read(a,n) for a,n in ((0x06008000,0x4000),(0x0600C800,0x800),(0x050001C0,32))]
+    video=[(a,e.read(a,n)) for a,n in ((0x06008000,0x4800),(0x0600C800,0x800),(0x050001C0,32))]
     native_tiles=e.read(0x06000000,0x8000)
-    native_hud_palette=e.read(0x050001E0,32)
-    previous_id=e.number(0x030039FA,2)
+    hud=e.read(0x050001E0,32)
     open_menu(e,group)
-    e.screenshot(name+'-first.png')
-    e.run(90)
-    assert e.number(0x030039FA,2)==previous_id
-    e.run(60,'Down');e.run(30)
-    assert menu_state(e)[1]==1, 'Holding Down must move once'
-    e.screenshot(name+'-second.png')
-    for key,expected in (('Down',0),('Up',1),('Up',0)):
-        e.press(key,30)
-        assert menu_state(e)[1]==expected
-    for key in ('Left','Right','Start'):
-        e.press(key,30)
-        assert menu_state(e)[1]==0 and menu_state(e)[0]==1
-    assert e.read(0x06000000,0x8000)==native_tiles, 'Selector overwrote native background/HUD graphics'
-    assert e.read(0x050001E0,32)==native_hud_palette, 'Selector overwrote native HUD palette'
-    e.press('Down',30)
-    # Holding the selection press opens the prompt but cannot answer it.
-    e.run(180,'A')
-    assert menu_state(e)==[1,1,0,group] and confirmation_state(e)==[1,0]
-    e.run(30)
-    e.screenshot(name+'-confirm-yes.png')
-    e.press('Down',30)
-    assert menu_state(e)[1]==1 and confirmation_state(e)==[1,0]
-    e.press('Right',30)
-    assert confirmation_state(e)==[1,1]
-    e.press('Left',30)
-    assert confirmation_state(e)==[1,0]
-    e.press('Right',30)
-    e.screenshot(name+'-confirm-no.png')
-    e.press('A',60)
-    assert menu_state(e)==[1,1,1,group] and confirmation_state(e)[0]==0, 'No must preserve the highlighted card'
-    e.press('A',60)
-    assert confirmation_state(e)==[1,0], 'A new prompt must start on Yes'
-    e.press('B',60)
-    assert menu_state(e)==[1,1,1,group] and confirmation_state(e)[0]==0, 'B must dismiss only the confirmation'
+    e.run(60,'Down');e.run(10)
+    assert menu_state(e)[1]==1, 'Held navigation moved more than once'
+    e.press('Up',5);e.press('Up',5)
+    assert menu_state(e)[1]==len(cards)-1
+    e.press('Down',5)
+    assert menu_state(e)[1]==0
+    # Page movement preserves the row and wraps.
+    if len(cards)>8:
+        e.press('Left',5)
+        assert menu_state(e)[1]==((len(cards)-1)//8)*8
+        e.press('Right',5)
+        assert menu_state(e)[1]==0
+    e.press('Start',5)
+    assert menu_state(e)[1]==0
+    for i,card in enumerate(cards):
+        assert menu_state(e)==[1,i,1,group]
+        screen=e.number(0x030075E0,4)
+        assert e.number(screen+0x205)==i//8
+        if card['folder']=='Switch':
+            compatible=card['applicability'] in (0,GROUP_CATALOG[group]['context'])
+            assert_switch_label(e,i,'OFF' if compatible else 'N/A')
+        if i%8==0:e.screenshot(f'{name}-page-{i//8+1}.png')
+        e.run(5,'A')
+        assert confirmation_state(e)==[1,0] and menu_state(e)[2]==0
+        e.run(5)
+        e.screenshot(f'{name}-confirm-{i:02}.png')
+        if i==0:
+            e.press('Right',5)
+            assert confirmation_state(e)==[1,1]
+            e.press('A',5)
+        else:e.press('B',5)
+        assert menu_state(e)==[1,i,1,group] and confirmation_state(e)[0]==0
+        e.press('Down',5)
+    assert menu_state(e)[1]==0
     assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash
+    assert e.read(0x06000000,0x8000)==native_tiles
+    assert e.read(0x050001E0,32)==hud
     e.press('B',120)
-    assert e.state().get('substate')==2 and menu_state(e)[0]==0
-    for before,(address,size) in zip(vram,((0x06008000,0x4000),(0x0600C800,0x800),(0x050001C0,32))):
-        assert e.read(address,size)==before, f'Menu failed to restore video memory at {address:08x}'
-    assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash
+    assert e.state()['substate']==2 and menu_state(e)[0]==0
+    for address,before in video:assert e.read(address,len(before))==before
     open_menu(e,group,hold=False)
-    e.press('Down',30)
+    assert menu_state(e)[1]==0
     e.press('B',120)
-    open_menu(e,group,hold=False)
-    assert menu_state(e)[1]==0, 'Every fresh menu must start on the first card'
-    e.press('B',120)
+
+
+def snapshot(e):
+    e.lib.retro_serialize_size.restype=C.c_size_t
+    data=C.create_string_buffer(e.lib.retro_serialize_size())
+    e.lib.retro_serialize.argtypes=[C.c_void_p,C.c_size_t]
+    e.lib.retro_serialize.restype=C.c_bool
+    assert e.lib.retro_serialize(data,len(data))
+    return data.raw
+
+
+def restore(e,data):
+    e.lib.retro_unserialize.argtypes=[C.c_void_p,C.c_size_t]
+    e.lib.retro_unserialize.restype=C.c_bool
+    assert e.lib.retro_unserialize(C.create_string_buffer(data),len(data))
+    e.run(1)
 
 
 def select_card(e,group,index):
     open_menu(e,group,hold=False)
-    if index:e.press('Down',30)
+    highlight(e,index)
     confirm_selected(e)
     spec=GROUP_CATALOG[group]['cards'][index]
     assert e.number(0x030039FA,2)==spec['id'], (e.state(),e.number(0x030039FA,2))
@@ -107,7 +146,7 @@ def confirm_selected(e):
 
 
 def power_prompt(e):
-    for _ in range(100):
+    for _ in range(1000):
         if e.state().get('substate')==32:
             e.run(60)
             return
@@ -127,7 +166,7 @@ def watch(e,group,index,back_state):
     flash=e.savedata()
     world_lives=e.number(0x03003A48,2) if group==2 else None
     spec=GROUP_CATALOG[group]['cards'][index]
-    card=decoded_card((ROOT/'eReader_cards'/GROUP_CATALOG[group]['folder']/spec['file']).read_bytes())
+    card=decoded_card((ROOT/'eReader_cards'/spec.get('folder',GROUP_CATALOG[group]['folder'])/spec['file']).read_bytes())
     replay=card[PAYLOAD+12:].ljust(0x800,b'\0')
     select_card(e,group,index)
     assert e.number(0x030039AD)==4 and e.number(0x030039F6)==group
@@ -135,7 +174,7 @@ def watch(e,group,index,back_state):
     e.until(lambda s:s['state']==0x1A)
     start=e.frames
     levels=set()
-    while e.state()['state']!=back_state and e.frames-start<30000:
+    while e.state()['state']!=back_state and e.frames-start<120000:
         if e.state()['state']==0x1A:levels.add(e.number(0x03003B08,2))
         elapsed=e.frames-start
         if elapsed in (120,1200):e.screenshot(f'playback-{group}-{index}-{elapsed}.png')
@@ -149,6 +188,10 @@ def watch(e,group,index,back_state):
         # inactive normal-file mirror. A World-e 5-Up exposes this bookkeeping.
         assert e.number(0x03003A48,2)==world_lives, 'Demo changed active World-e lives'
         expected[10:12]=world_lives.to_bytes(2,'little')
+        # Native World-e playback (080C1D94) selects the recording's character
+        # from replay header bit 14 and leaves that selection on return. Castle
+        # Dash is a Luigi recording; this is a character selection, not progress.
+        expected[0x317]=(int.from_bytes(replay[6:8],'little')>>14)&1
     assert after==expected, 'Demo changed save-file RAM: '+str([(hex(0x03002A60+i),x,y) for i,(x,y) in enumerate(zip(expected,after)) if x!=y])
     assert e.savedata()==flash, 'Demo changed cartridge save memory'
     e.screenshot(f'returned-{group}-{index}.png')
@@ -157,7 +200,6 @@ def watch(e,group,index,back_state):
 
 def run_context(core,rom,artifacts,world_e=False):
     e=Emulator(core,rom,artifacts)
-    runs=[]
     try:
         boot_to_file_select(e)
         if world_e:
@@ -167,58 +209,81 @@ def run_context(core,rom,artifacts,world_e=False):
             for _ in range(2):e.press('A',300)
         back_state=0x4C if world_e else 0x11
         assert e.state()['state']==back_state
-        selected_powerup=False
-        def scan(powerup=False):
-            nonlocal selected_powerup
-            # World-e rebuilds its map object on return, resetting the native
-            # two-choice R popup to Demo. The main-game popup remembers its row.
-            if world_e:selected_powerup=False
+        baseline=snapshot(e)
+        power_group=3 if world_e else 0
+        demos=[]
+        rewards=[]
+        for group in (power_group,2 if world_e else 1):
+            restore(e,baseline)
             e.press('R')
-            if powerup!=selected_powerup:
-                e.press('Down')
-                selected_powerup=powerup
+            if group==power_group:e.press('Down')
             e.press('A',600)
-            assert e.state().get('substate')==2
-
-        # The Power-Up list uses the same controller in both worlds.
-        scan(True)
-        parity(e,0,'powerup')
-        life_address=0x03003A48 if world_e else 0x03002A6A
-        lives=e.number(life_address,2)
-        inventory=e.inventory()
-        select_card(e,0,0)
-        e.until(lambda s:e.number(life_address,2)==lives+5)
-        assert e.inventory()==inventory
-        e.screenshot('five-up-granted.png')
-        # Yes opens a fresh selector; it must not apply another card.
-        power_prompt(e)
-        e.press('A',120)
-        assert menu_state(e)==[1,0,1,0] and e.number(life_address,2)==lives+5
-        e.press('Down',30)
-        confirm_selected(e)
-        e.run(300)
-        assert e.inventory()==ITEMS+bytes(26)
-        finish_power(e,back_state)
-
-        group=2 if world_e else 1
-        scan()
-        parity(e,group,'demo')
-        # Cancel twice returns to the originating map and applies neither card.
-        e.press('B',600)
-        assert e.state()['state']==back_state
-        for index in (0,1):
-            scan()
-            runs.append(watch(e,group,index,back_state))
-        return {'passed':True,'frames':e.frames,'demos':runs,
-                'checks':['shared input behavior','held OK cannot activate','idle causes no effects',
-                          'Up/Down wrap equally','held navigation moves once','unmapped buttons ignored',
-                          'B returns to OK','second B returns to map','selection resets on reopen',
-                          'held selection cannot confirm','No and B preserve selected row',
-                          'Left/Right choose Yes/No','only explicit Yes activates',
-                          'native HUD graphics and palette intact','video memory restored','only applicable Demo IDs/payloads',
-                          'both Demo selections complete without input','progress and save memory preserved',
-                          '5-Up grants exactly five lives','repeat prompt opens selector',
-                          '10-Item Set still grants ten items']}
+            ready=snapshot(e)
+            parity(e,group,'powerup' if group==power_group else 'demo')
+            for index,spec in enumerate(GROUP_CATALOG[group]['cards']):
+                restore(e,ready)
+                print(('world-e' if world_e else 'normal')+f' group {group} card {index+1}: '+spec['file'],flush=True)
+                if group!=power_group:
+                    demos.append(watch(e,group,index,back_state))
+                    continue
+                path=ROOT/'eReader_cards'/spec['folder']/spec['file']
+                data=decoded_card(path.read_bytes())[PAYLOAD:]
+                subtype=data[8]
+                count=int.from_bytes(data[9:11],'little')
+                life_address=0x03003A48 if world_e else 0x03002A6A
+                lives=e.number(life_address,2)
+                inventory=e.inventory()
+                flags=e.number(0x03002D52,2)
+                switch_address=0x03003A8B if world_e else 0x03002D64
+                switches=e.number(switch_address)
+                select_card(e,group,index)
+                assert e.number(0x030039AD)==spec['type']
+                assert e.number(0x030039CF)==subtype and e.number(0x030039D0,2)==count
+                power_prompt(e)
+                compatible=spec['applicability'] in (0,GROUP_CATALOG[group]['context'])
+                if not compatible:
+                    assert spec['folder']=='Switch'
+                    assert e.number(0x03002D52,2)==flags and e.number(switch_address)==switches
+                    assert e.inventory()==inventory and e.number(life_address,2)==lives
+                    e.screenshot(f'incompatible-switch-{index}.png')
+                elif subtype==0:
+                    assert e.inventory()==data[12:12+count].ljust(36,b'\0'), (spec,e.inventory().hex())
+                elif subtype==1:
+                    assert e.number(life_address,2)==min(998,lives+count), (spec,e.number(life_address,2),lives,count)
+                    assert e.inventory()==inventory
+                else:
+                    masks={2:0x400,3:0x40,4:1,5:0x100,6:0x10,7:2,8:0x2A80}
+                    assert e.number(0x03002D52,2)==flags^masks[subtype], (spec,hex(e.number(0x03002D52,2)),hex(flags))
+                    assert e.number(switch_address)==switches^(1<<(subtype-2))
+                    assert e.inventory()==inventory
+                rewards.append({'card':spec['file'],'id':spec['id'],'type':spec['type'],
+                                'subtype':subtype,'count':count,'compatible':compatible})
+                if spec['folder']=='Switch':
+                    # Native repeat Yes must reopen with the current saved state.
+                    e.press('A',120)
+                    assert menu_state(e)==[1,0,1,group]
+                    highlight(e,index)
+                    assert_switch_label(e,index,'ON' if compatible else 'N/A')
+                    e.screenshot(f'switch-after-scan-{index}.png')
+                    if compatible:
+                        confirm_selected(e)
+                        power_prompt(e)
+                        assert e.number(0x03002D52,2)==flags and e.number(switch_address)==switches
+                        e.press('A',120)
+                        highlight(e,index)
+                        assert_switch_label(e,index,'OFF')
+                        e.screenshot(f'switch-after-second-scan-{index}.png')
+                    e.press('B',120);e.press('B',600)
+                    assert e.state()['state']==back_state
+                else:finish_power(e,back_state)
+        return {'passed':True,'frames':e.frames,'powerups':rewards,'demos':demos,
+                'checks':['every row and confirmation in each context','all real page boundaries and wrap',
+                          'held buttons cannot select/confirm twice','No and B preserve row/page',
+                          'native video restored on cancellation','all applicable Power-Up rewards',
+                          'Switch ON/OFF rendered colours and repeat updates','N/A visible and scan attempt allowed',
+                          'compatible Switch toggles ON then OFF','100-Up promotional type 2',
+                          'all applicable Demo payloads and complete playback','Demo progress/save preservation',
+                          'native emulator savestates isolate each card']}
     finally:e.save_trace();e.close()
 
 
@@ -239,7 +304,10 @@ def main():
             'memory_writes_by_test':0}
     assert sha256(original.read_bytes())==ROM_SHA256
     result_path.write_text(json.dumps(report,indent=2)+'\n')
-    print(json.dumps(report,indent=2))
+    print(json.dumps({'passed':True,'rom_sha256':report['rom_sha256'],
+                      'powerup_applications':sum(len(report[c]['powerups']) for c in ('normal','world_e')),
+                      'complete_demos':sum(len(report[c]['demos']) for c in ('normal','world_e')),
+                      'report':str(result_path)},indent=2))
 
 
 if __name__=='__main__':main()

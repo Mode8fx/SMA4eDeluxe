@@ -9,9 +9,11 @@
 #define NATIVE_SCROLL_X MEM16(0x03003750)
 #define NATIVE_SCROLL_Y MEM16(0x03003754)
 #define TILE_WORDS 0x1000
-#define MAP_BACKUP (BACKUP + 0x4000)
-#define PALETTE_BACKUP (BACKUP + 0x4800)
+#define VIDEO_BACKUP_WORDS 0x1200
+#define MAP_BACKUP (BACKUP + 0x4800)
+#define PALETTE_BACKUP (BACKUP + 0x5000)
 static void draw_arrow(MenuState *state, const CardGroup *group);
+static void draw_switches(MenuState *state, const CardGroup *group);
 
 static void enable_layer(void) {
     BG1_CONTROL_BUFFER = 0x1908; /* Separate character bank 2 preserves native HUD tiles. */
@@ -41,17 +43,20 @@ void menu_view_update(MenuState *state, const CardGroup *group) {
             destination[(((y+sy)&31)<<5) + ((x+sx)&31)] = source[(y<<5)+x];
     enable_layer();
     draw_arrow(state, group);
+    state->status_valid = 0;
+    draw_switches(state, group);
 }
 
 void menu_view_open(MenuState *state, const CardGroup *group) {
     state->animation = 0;
+    state->status_valid = 0;
     state->loaded_page = 255;
     state->bg1_control = BG1_CONTROL_BUFFER;
     state->bg1_x = NATIVE_SCROLL_X;
     state->bg1_y = NATIVE_SCROLL_Y;
     state->bg1_enabled = DISPLAY_BUFFER & 0x0200;
     state->sprites_enabled = DISPLAY_BUFFER & 0x1000;
-    copy_words(TILE_VRAM, BACKUP, TILE_WORDS);
+    copy_words(TILE_VRAM, BACKUP, VIDEO_BACKUP_WORDS);
     copy_words(MAP_VRAM, MAP_BACKUP, 0x200);
     copy_words(PALETTE, PALETTE_BACKUP, 8);
     copy_words((const void *)MENU_PALETTE_ADDRESS, PALETTE, 8);
@@ -61,7 +66,7 @@ void menu_view_open(MenuState *state, const CardGroup *group) {
 void menu_view_close(MenuState *state) {
     DISPLAY_BUFFER &= ~0x0200;
     MEM16(0x04000000) = DISPLAY_BUFFER;
-    copy_words(BACKUP, TILE_VRAM, TILE_WORDS);
+    copy_words(BACKUP, TILE_VRAM, VIDEO_BACKUP_WORDS);
     copy_words(MAP_BACKUP, MAP_VRAM, 0x200);
     copy_words(PALETTE_BACKUP, PALETTE, 8);
     MEM16(0x0400000A) = state->bg1_control;
@@ -92,4 +97,49 @@ static void draw_arrow(MenuState *state, const CardGroup *group) {
 void menu_view_tick(MenuState *state, const CardGroup *group) {
     if (++state->animation == 22) state->animation = 0;
     draw_arrow(state, group);
+    draw_switches(state, group);
+}
+
+/* A separate 24x88 pixel strip allows status changes without rebuilding static
+   page assets or overlapping text on adjacent rows. Tiles 512..544 are below
+   the map at 0600C800 and are included in the extended video backup. */
+static void draw_switches(MenuState *state, const CardGroup *group) {
+    u32 context, flags, row, first, x, y, sx, sy;
+    volatile u16 *map = (volatile u16 *)MAP_VRAM;
+    const MenuPage *page;
+    if (state->confirming || (state->group != 0 && state->group != 3)) return;
+    context = state->group == 0 ? 1 : 2;
+    flags = MEM8(context == 1 ? 0x03002D64 : 0x03003A8B);
+    if (state->status_valid && state->status_flags == flags) return;
+    state->status_valid = 1;
+    state->status_flags = flags;
+    page = &group->pages[state->selected >> 3];
+    copy_words(page->status_base, (void *)0x0600C000, 0x108);
+    first = state->selected & ~7;
+    for (row=0; row<8 && first+row<group->count; ++row) {
+        const u8 *payload = group->cards[first+row].payload;
+        u32 subtype = payload[8], applicability = payload[11], status;
+        const u8 *glyph;
+        if (subtype < 2 || subtype > 8) continue;
+        status = applicability && applicability != context ? 2
+                 : ((flags & (1 << (subtype-2))) ? 0 : 1);
+        glyph = (const u8 *)MENU_STATUS_ADDRESS + status * 96;
+        for (y=0; y<8; ++y) {
+            u32 py = 1 + row*11 + y;
+            for (x=0; x<24; ++x) {
+                u32 pixel = (glyph[y*12+(x>>1)] >> ((x&1)*4)) & 15;
+                if (pixel) {
+                    volatile u16 *dest = (volatile u16 *)(0x0600C000
+                        + ((py>>3)*3+(x>>3))*32 + (py&7)*4 + ((x&7)>>2)*2);
+                    u32 shift = (x&3)*4;
+                    *dest = (*dest & ~(15 << shift)) | (pixel << shift);
+                }
+            }
+        }
+    }
+    sx = (NATIVE_SCROLL_X >> 3) & 31;
+    sy = (NATIVE_SCROLL_Y >> 3) & 31;
+    for (y=0; y<11; ++y)
+        for (x=0; x<3; ++x)
+            map[(((3+y+sy)&31)<<5)+((22+x+sx)&31)] = 0xE200 + y*3+x;
 }

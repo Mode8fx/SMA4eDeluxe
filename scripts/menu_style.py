@@ -5,7 +5,7 @@ remain in the shared C controller.
 """
 import struct
 
-MAX_NAME_LENGTH = 31
+MAX_NAME_LENGTH = 32
 
 
 def lz77(rom, offset):
@@ -40,7 +40,10 @@ class NativeFont:
         if 'A' <= char <= 'Z': code = ord(char)-ord('A')
         elif 'a' <= char <= 'z': code = ord(char)-ord('a')+0x20
         elif '0' <= char <= '9': code = ord(char)-ord('0')+(0xEE if small else 0x76)
-        elif char in ' -?': code = {' ':0xE3,'-':0xE2,'?':0xE0}[char]
+        elif char in " -?'.": code = {' ':0xE3,'-':0xE2,'?':0xE0,"'":0x1C,'.':0x1E}[char]
+        elif char == ':':
+            # Two copies of the native full stop's 2-pixel dot.
+            return 3, [[int(x<2 and y in (2,3,5,6)) for x in range(3)] for y in range(8)]
         elif char == '/':
             return 4, [[int(x == 3-y//2) for x in range(4)] for y in range(8)]
         else: raise ValueError(f'Unsupported native-font character: {char!r}')
@@ -89,7 +92,7 @@ def cursor(canvas,x,y):
 # Palette indices 1/2/3/13/14/15 retain the native frame's meanings.
 # These are its displayed BGR555 colours, including the game's palette adjustment.
 COLORS = [0,0x7FFF,0,0x6F7B,0x1A5F,0x233F,0x27DF,0x001F,
-          0x030E,0x7BFF,0x4210,0,0,0x6DE5,0x7F72,0x7FB5]
+          0x030E,0x7BFF,0x4210,rgb(0,160,0),rgb(216,0,0),0x6DE5,0x7F72,0x7FB5]
 
 
 def tile_pixel(graphics, tile, x, y):
@@ -183,6 +186,12 @@ def make_assets(groups, rom):
     frame=NativeFrame(rom)
     pages=[]
     metrics=[]
+    status_glyphs=bytearray()
+    for label,color in (('ON',11),('OFF',12),('N/A',2)):
+        canvas=[[0]*24 for _ in range(8)]
+        font.draw(canvas,24-font.width(label),0,label,color=color)
+        status_glyphs.extend(canvas[y][x] | canvas[y][x+1]<<4
+                             for y in range(8) for x in range(0,24,2))
     for group in groups:
         group_pages=[]
         for first in range(0,len(group['cards']),8):
@@ -210,11 +219,16 @@ def make_assets(groups, rom):
                 arrows.extend(cell(canvas,tx,ty) for ty in range(8,10) for tx in range(27,30))
             graphics=b''.join(tiles)
             if len(graphics)>0x4000:raise ValueError(f'Menu page exceeds 512 tiles: {len(tiles)}')
+            base=list_canvas(group,first,font,frame)
+            status_base=bytes(base[ty*8+y][tx*8+x] | base[ty*8+y][tx*8+x+1]<<4
+                              for ty in range(3,14) for tx in range(22,25)
+                              for y in range(8) for x in range(0,8,2))
             group_pages.append({'font':graphics.ljust(0x4000,b'\0'),
-                                'maps':b''.join(maps),'arrows':struct.pack('<24H',*arrows)})
+                                'maps':b''.join(maps),'arrows':struct.pack('<24H',*arrows),
+                                'status_base':status_base})
             metrics.append(len(tiles))
         pages.append(group_pages)
-    return pages,struct.pack('<16H',*COLORS),{
+    return pages,struct.pack('<16H',*COLORS),bytes(status_glyphs),{
         'font':'Original World-e variable-width font','font_rom_offset':'0x23abfc',
         'frame_graphics_rom_offset':'0x235c08','frame_map_rom_offset':'0x23d560',
         'arrow_graphics_rom_offset':'0x239b70','arrow_cycle_frames':22,
@@ -223,5 +237,6 @@ def make_assets(groups, rom):
         'tiles_per_page':metrics,'rows':8,'variants_per_card':3,
         'columns':['filename ID',f'filename name (up to {MAX_NAME_LENGTH} characters)','region (JPN/USA, black)'],
         'max_name_length':MAX_NAME_LENGTH,
+        'switch_status':{'ON':'green','OFF':'red','N/A':'black','field_x':176,'field_right':200},
         'category_banner_y_offset':-3,
         'native_category_banner_preserved':True,'confirmation':'Scan this card?'}
