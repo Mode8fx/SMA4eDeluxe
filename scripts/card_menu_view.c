@@ -12,8 +12,16 @@
 #define VIDEO_BACKUP_WORDS 0x1200
 #define MAP_BACKUP (BACKUP + 0x4800)
 #define PALETTE_BACKUP (BACKUP + 0x5000)
+#define STATUS_STAGE (BACKUP + 0x5020)
+#define MAP_STAGE ((u16 *)(BACKUP + 0x5440))
 static void draw_arrow(MenuState *state, const CardGroup *group);
-static void draw_switches(MenuState *state, const CardGroup *group);
+static u32 prepare_switches(MenuState *state, const CardGroup *group);
+
+static void wait_vblank(void) {
+    /* Start at a fresh VBlank so the bank, strip and map publish together. */
+    while (MEM16(0x04000006) >= 160) {}
+    while (MEM16(0x04000006) < 160) {}
+}
 
 static void enable_layer(void) {
     BG1_CONTROL_BUFFER = 0x1908; /* Separate character bank 2 preserves native HUD tiles. */
@@ -35,22 +43,25 @@ void menu_view_update(MenuState *state, const CardGroup *group) {
     /* List pages and each card's confirmation use independent tile banks.
        The Yes/No maps share a bank, so switching answers needs no tile upload. */
     u32 bank = state->confirming ? 16 + state->selected : page_index;
-    if (state->loaded_bank != bank) {
+    u32 bank_changed = state->loaded_bank != bank;
+    if (bank_changed) state->status_valid = 0;
+    u32 status_changed = prepare_switches(state, group);
+    u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
+    for (y=0; y<32; ++y)
+        for (x=0; x<32; ++x)
+            MAP_STAGE[(((y+sy)&31)<<5) + ((x+sx)&31)] = source[(y<<5)+x];
+    wait_vblank();
+    if (bank_changed) {
         const void *font = state->confirming
             ? page->confirmation_fonts + ((u32)(state->selected & 7) << 14)
             : page->font;
         copy_words(font, TILE_VRAM, TILE_WORDS);
         state->loaded_bank = bank;
     }
-    volatile u16 *destination = (volatile u16 *)MAP_VRAM;
-    u32 x, y, sx = (NATIVE_SCROLL_X >> 3) & 31, sy = (NATIVE_SCROLL_Y >> 3) & 31;
-    for (y=0; y<32; ++y)
-        for (x=0; x<32; ++x)
-            destination[(((y+sy)&31)<<5) + ((x+sx)&31)] = source[(y<<5)+x];
+    if (status_changed) copy_words(STATUS_STAGE, (void *)0x0600C000, 0x108);
+    copy_words(MAP_STAGE, MAP_VRAM, 0x200);
     enable_layer();
     draw_arrow(state, group);
-    state->status_valid = 0;
-    draw_switches(state, group);
 }
 
 void menu_view_open(MenuState *state, const CardGroup *group) {
@@ -103,25 +114,30 @@ static void draw_arrow(MenuState *state, const CardGroup *group) {
 
 void menu_view_tick(MenuState *state, const CardGroup *group) {
     if (++state->animation == 22) state->animation = 0;
+    if (prepare_switches(state, group)) {
+        wait_vblank();
+        copy_words(STATUS_STAGE, (void *)0x0600C000, 0x108);
+    }
     draw_arrow(state, group);
-    draw_switches(state, group);
 }
 
 /* A separate 24x88 pixel strip allows status changes without rebuilding static
    page assets or overlapping text on adjacent rows. Tiles 512..544 are below
    the map at 0600C800 and are included in the extended video backup. */
-static void draw_switches(MenuState *state, const CardGroup *group) {
-    u32 context, flags, row, first, x, y, sx, sy;
-    volatile u16 *map = (volatile u16 *)MAP_VRAM;
+static u32 prepare_switches(MenuState *state, const CardGroup *group) {
+    u32 context, flags, row, first, x, y, bank;
+    const u8 *background;
     const MenuPage *page;
-    if (state->confirming || (state->group != 0 && state->group != 3)) return;
+    if (state->group != 0 && state->group != 3) return 0;
     context = state->group == 0 ? 1 : 2;
     flags = MEM8(context == 1 ? 0x03002D64 : 0x03003A8B);
-    if (state->status_valid && state->status_flags == flags) return;
+    if (state->status_valid && state->status_flags == flags) return 0;
     state->status_valid = 1;
     state->status_flags = flags;
     page = &group->pages[state->selected >> 3];
-    copy_words(page->status_base, (void *)0x0600C000, 0x108);
+    bank = state->confirming ? 1 + (state->selected & 7) : 0;
+    background = (const u8 *)page->status_base + bank * 1060;
+    copy_words(background + 4, STATUS_STAGE, 0x108);
     first = state->selected & ~7;
     for (row=0; row<8 && first+row<group->count; ++row) {
         const u8 *payload = group->cards[first+row].payload;
@@ -133,20 +149,19 @@ static void draw_switches(MenuState *state, const CardGroup *group) {
         glyph = (const u8 *)MENU_STATUS_ADDRESS + status * 96;
         for (y=0; y<8; ++y) {
             u32 py = 1 + row*11 + y;
+            /* The strip includes the popup's own pixels. Only show labels in
+               portions of the underlying list that the popup does not cover. */
+            if (py+24 >= background[0] && py+24 < background[1]) continue;
             for (x=0; x<24; ++x) {
                 u32 pixel = (glyph[y*12+(x>>1)] >> ((x&1)*4)) & 15;
                 if (pixel) {
-                    volatile u16 *dest = (volatile u16 *)(0x0600C000
-                        + ((py>>3)*3+(x>>3))*32 + (py&7)*4 + ((x&7)>>2)*2);
-                    u32 shift = (x&3)*4;
+                    u8 *dest = STATUS_STAGE
+                        + ((py>>3)*3+(x>>3))*32 + (py&7)*4 + ((x&7)>>1);
+                    u32 shift = (x&1)*4;
                     *dest = (*dest & ~(15 << shift)) | (pixel << shift);
                 }
             }
         }
     }
-    sx = (NATIVE_SCROLL_X >> 3) & 31;
-    sy = (NATIVE_SCROLL_Y >> 3) & 31;
-    for (y=0; y<11; ++y)
-        for (x=0; x<3; ++x)
-            map[(((3+y+sy)&31)<<5)+((22+x+sx)&31)] = 0xE200 + y*3+x;
+    return 1;
 }

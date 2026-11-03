@@ -210,10 +210,16 @@ def list_canvas(group, selected, font, frame):
     return canvas
 
 
-def confirmation(canvas, choice, font, frame, card):
+def confirmation_bounds(card, font):
     lines = description_lines(card, font)
     top = 44 - (11*len(lines))//2
-    frame.communication_box(canvas,24,top,216,top+60+11*len(lines))
+    return top, top+60+11*len(lines)
+
+
+def confirmation(canvas, choice, font, frame, card):
+    lines = description_lines(card, font)
+    top,bottom = confirmation_bounds(card,font)
+    frame.communication_box(canvas,24,top,216,bottom)
     prompt='Scan this card?'
     font.draw(canvas,(240-font.width(prompt))//2,top+9,prompt)
     font.draw(canvas,(240-font.width(card['name']))//2,top+22,card['name'])
@@ -243,6 +249,10 @@ def make_assets(groups, rom):
             tiles=[bytes(32)]
             tile_ids={tiles[0]:0}
             def cell(canvas,tx,ty,tiles=tiles,tile_ids=tile_ids):
+                # Every view refers to the persistent status strip, including
+                # confirmations. Cursor changes never replace it with blank tiles.
+                if group['kind']=='power' and 22<=tx<25 and 3<=ty<14:
+                    return 0xE200+(ty-3)*3+tx-22
                 tile=bytes(canvas[ty*8+y][tx*8+x] | canvas[ty*8+y][tx*8+x+1]<<4
                            for y in range(8) for x in range(0,8,2))
                 if tile not in tile_ids:
@@ -252,6 +262,12 @@ def make_assets(groups, rom):
             maps=[]
             confirmation_fonts=[]
             confirmation_arrows=[]
+            def status_record(canvas,top=0,bottom=0):
+                return struct.pack('<BBH',top,bottom,0)+bytes(
+                    canvas[ty*8+y][tx*8+x] | canvas[ty*8+y][tx*8+x+1]<<4
+                    for ty in range(3,14) for tx in range(22,25)
+                    for y in range(8) for x in range(0,8,2))
+            status_bases=[status_record(list_canvas(group,first,font,frame))]
             for selected in range(first,min(first+8,len(group['cards']))):
                 popup_tiles=[bytes(32)]
                 popup_ids={popup_tiles[0]:0}
@@ -259,6 +275,10 @@ def make_assets(groups, rom):
                     canvas=list_canvas(group,selected,font,frame)
                     if len(group['cards'])>8:frame.sprite(canvas,224,65,0x1D,16,True)
                     if mode:confirmation(canvas,mode-1,font,frame,group['cards'][selected])
+                    if mode:
+                        record=status_record(canvas,*confirmation_bounds(group['cards'][selected],font))
+                        if mode==1:status_bases.append(record)
+                        elif record!=status_bases[-1]:raise ValueError('Yes/No must share the status-strip background')
                     maps.append(struct.pack('<1024H',*((cell(canvas,x,y,popup_tiles,popup_ids)
                                 if mode else cell(canvas,x,y))
                                 for y in range(32) for x in range(32))))
@@ -278,14 +298,10 @@ def make_assets(groups, rom):
                 arrows.extend(cell(canvas,tx,ty) for ty in range(8,10) for tx in range(27,30))
             graphics=b''.join(tiles)
             if len(graphics)>0x4000:raise ValueError(f'Menu page exceeds 512 tiles: {len(tiles)}')
-            base=list_canvas(group,first,font,frame)
-            status_base=bytes(base[ty*8+y][tx*8+x] | base[ty*8+y][tx*8+x+1]<<4
-                              for ty in range(3,14) for tx in range(22,25)
-                              for y in range(8) for x in range(0,8,2))
             group_pages.append({'font':graphics.ljust(0x4000,b'\0'),
                                 'confirmation_fonts':b''.join(confirmation_fonts),
                                 'maps':b''.join(maps),'arrows':struct.pack(f'<{len(arrows)+len(confirmation_arrows)}H',*arrows,*confirmation_arrows),
-                                'status_base':status_base})
+                                'status_base':b''.join(status_bases)})
             metrics.append(len(tiles))
         pages.append(group_pages)
     return pages,struct.pack('<16H',*COLORS),bytes(status_glyphs),{
@@ -301,6 +317,8 @@ def make_assets(groups, rom):
         'tiles_per_page':metrics,'rows':8,'variants_per_card':3,
         'columns':['filename ID',f'filename name (up to {MAX_NAME_LENGTH} characters)','region (JPN/USA, black)'],
         'max_name_length':MAX_NAME_LENGTH,
-        'switch_status':{'ON':'green','OFF':'red','N/A':'black','field_x':176,'field_right':200},
+        'switch_status':{'ON':'green','OFF':'red','N/A':'black','field_x':176,'field_right':200,
+                         'persistent_map_tiles':True,'confirmation_occlusion':True,
+                         'status_background_record_bytes':1060,'updates_during_vblank':True},
         'category_banner_y_offset':-3,
         'native_category_banner_preserved':True,'confirmation':'Scan this card?'}
