@@ -88,8 +88,11 @@ void card_menu_tick(void *screen) {
         return;
     }
     selected = state->selected;
-    if (BUTTONS_PRESSED & 0x40) selected = selected ? selected - 1 : group->count - 1;
-    else if (BUTTONS_PRESSED & 0x80) selected = selected + 1 < group->count ? selected + 1 : 0;
+    if (BUTTONS_PRESSED & 0x40) {
+        if (selected & 7) --selected;
+    } else if (BUTTONS_PRESSED & 0x80) {
+        if ((selected & 7) != 7 && selected + 1 < group->count) ++selected;
+    }
     else if ((BUTTONS_PRESSED & 0x30) && group->count > 8) {
         u32 page = selected >> 3, last = (group->count - 1) >> 3;
         if (BUTTONS_PRESSED & 0x10) page = page < last ? page + 1 : 0;

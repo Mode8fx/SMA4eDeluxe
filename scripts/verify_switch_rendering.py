@@ -72,7 +72,7 @@ def check_phase(e,group,phase):
         frames+=count
         assert restored==before and confirmation_state(e)[0]==0
         if index<32:
-            _,_,count=transition(e,'Down',f'{phase}-next-{index}',index!=31)
+            _,_,count=transition(e,'Right' if index==31 else 'Down',f'{phase}-next-{index}',index!=31)
             frames+=count
     return frames
 

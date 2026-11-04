@@ -35,6 +35,8 @@ def check_list(e,group,name):
     old_vram=e.read(0x06008000,0x4800)
     old_map=e.read(0x0600C800,0x800)
     open_menu(e,group)
+    e.press('Up',10)
+    assert menu_state(e)[1]==0
     assert banner(e)==native_banner, 'Native banner changed or disappeared'
     assert animation_state(e)[1]==0
     e.screenshot(name+'-page-1.png')
@@ -57,12 +59,17 @@ def check_list(e,group,name):
         e.run(1)
     assert samples[:22]==samples[22:] and len(set(samples))==4
     for _ in range(8):e.press('Down',10)
+    assert menu_state(e)[1]==7, 'Down crossed the bottom of the first page'
+    e.press('Right',10)
+    for _ in range(7):e.press('Up',10)
     assert menu_state(e)[1]==8 and animation_state(e)[1]==1
+    e.press('Up',10)
+    assert menu_state(e)[1]==8, 'Up crossed the top of the second page'
     e.screenshot(name+'-page-2.png')
     # Right/Left preserve the row when it exists; clamp on a short final page.
-    for key,index in (('Right',16),('Right',0),('Left',16),('Down',17),
+    for key,index in (('Right',16),('Up',16),('Right',0),('Left',16),('Down',17),('Down',17),
                       ('Right',1),('Right',9),('Right',17),('Right',1),
-                      ('Up',0),('Up',17)):
+                      ('Up',0),('Up',0),('Left',16),('Down',17)):
         e.press(key,10)
         assert menu_state(e)[1]==index, (key,menu_state(e))
         assert animation_state(e)[1]==index//8
@@ -117,6 +124,7 @@ def check_list(e,group,name):
     return {'group':group,'pages':3,'rows':18,'arrow_period':22,
             'arrow_positions':4,'native_banner_preserved':True,
             'confirmation_arrow_bank_verified':True,
+            'vertical_page_edges_stop':True,
             'last_page_activated_id':expected_id,'passed':True}
 
 

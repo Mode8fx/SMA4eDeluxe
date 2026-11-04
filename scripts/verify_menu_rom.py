@@ -89,8 +89,6 @@ def parity(e, group, name):
     e.run(60,'Down');e.run(10)
     assert menu_state(e)[1]==1, 'Held navigation moved more than once'
     e.press('Up',5);e.press('Up',5)
-    assert menu_state(e)[1]==len(cards)-1
-    e.press('Down',5)
     assert menu_state(e)[1]==0
     # Page movement preserves the row and wraps.
     if len(cards)>8:
@@ -102,6 +100,9 @@ def parity(e, group, name):
     assert menu_state(e)[1]==0
     for i,card in enumerate(cards):
         assert menu_state(e)==[1,i,1,group]
+        if i%8==0:
+            e.press('Up',5)
+            assert menu_state(e)[1]==i, 'Up crossed the top of the page'
         screen=e.number(0x030075E0,4)
         assert e.number(screen+0x205)==i//8
         if card['folder']=='Switch':
@@ -120,8 +121,14 @@ def parity(e, group, name):
             e.press('A',5)
         else:e.press('B',5)
         assert menu_state(e)==[1,i,1,group] and confirmation_state(e)[0]==0
-        e.press('Down',5)
-    assert menu_state(e)[1]==0
+        if i%8==7 or i==len(cards)-1:
+            e.press('Down',5)
+            assert menu_state(e)[1]==i, 'Down crossed the bottom of the page'
+            if i+1<len(cards):
+                e.press('Right',5)
+                while menu_state(e)[1]%8:e.press('Up',5)
+        else:e.press('Down',5)
+    assert menu_state(e)[1]==len(cards)-1
     assert e.read(0x03002A60,0x31C)==progress and e.savedata()==flash
     assert e.read(0x06000000,0x8000)==native_tiles
     assert e.read(0x050001E0,32)==hud
@@ -302,7 +309,8 @@ def run_context(core,rom,artifacts,world_e=False):
                     assert e.state()['state']==back_state
                 else:finish_power(e,back_state)
         return {'passed':True,'frames':e.frames,'powerups':rewards,'demos':demos,
-                'checks':['every row and confirmation in each context','all real page boundaries and wrap',
+                'checks':['every row and confirmation in each context','Up/Down stop at every page edge',
+                          'Left/Right page boundaries and wrap',
                           'held buttons cannot select/confirm twice','No and B preserve row/page',
                           'blue descriptions render completely for both Yes/No choices',
                           'native video restored on cancellation','all applicable Power-Up rewards',
