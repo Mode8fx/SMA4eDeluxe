@@ -4,33 +4,12 @@ import json
 import struct
 from pathlib import Path
 
-from build_rom import ROOT,ROM_NAME,sha256
+from build_rom import DEFAULT_OUTPUT, ROOT,ROM_NAME,sha256,GROUP_CATALOG
 from menu_style import COLORS,native_palette
-from verify_test_rom import Emulator,boot_to_file_select
+from ips import read_ips,apply_ips
+from emulator import DEFAULT_CORE,Emulator,boot_to_map
 from verify_menu_rom import (open_menu,highlight,parity,snapshot,restore,
                              assert_confirmation_description)
-
-
-def apply_ips(image,patch):
-    """Create an emulator-only fixture; never change the supplied ROM or IPS."""
-    assert patch[:5]==b'PATCH'
-    result=bytearray(image)
-    cursor=5
-    while patch[cursor:cursor+3]!=b'EOF':
-        offset=int.from_bytes(patch[cursor:cursor+3],'big')
-        length=int.from_bytes(patch[cursor+3:cursor+5],'big')
-        cursor+=5
-        if length:
-            data=patch[cursor:cursor+length]
-            cursor+=length
-        else:
-            length=int.from_bytes(patch[cursor:cursor+2],'big')
-            data=patch[cursor+2:cursor+3]*length
-            cursor+=3
-        assert offset+length<=len(result)
-        result[offset:offset+length]=data
-    assert cursor+3==len(patch), 'Fixture must not truncate the ROM'
-    return bytes(result)
 
 
 def adjusted_palette(original,mode):
@@ -47,17 +26,13 @@ def run_context(core,rom,image,artifacts,mode,world_e):
         original=(ROOT/'original_roms'/ROM_NAME).read_bytes()
         expected=adjusted_palette(original,mode)
         if mode==2:assert expected==COLORS, 'Normal GBA appearance changed'
-        boot_to_file_select(e)
+        boot_to_map(e,world_e)
         if world_e:
-            for _ in range(3):e.press('Down',60)
-            e.press('A',600)
             # Compare against the actual native menu, independent of our renderer.
             frame=struct.unpack('<16H',e.read(0x05000180,32))
             arrow=struct.unpack('<16H',e.read(0x050003A0,32))
             for i in (1,2,3,13,14,15):assert expected[i]==frame[i], (mode,i,expected[i],frame[i])
             for i in range(4,9):assert expected[i]==arrow[i-1], (mode,i,expected[i],arrow[i-1])
-        else:
-            for _ in range(2):e.press('A',300)
         assert e.number(0x0300378B)&6==mode
         baseline=snapshot(e)
         for group in ((3,2) if world_e else (0,1)):
@@ -76,7 +51,6 @@ def run_context(core,rom,image,artifacts,mode,world_e):
             assert e.read(0x050001C0,32)==struct.pack('<16H',*expected)
             e.screenshot(name+'-confirmation.png')
             if group in (0,3):
-                from build_menu_rom import GROUP_CATALOG
                 assert_confirmation_description(e,GROUP_CATALOG[group]['cards'][20])
             e.press('B',10);e.press('B',120)
             assert e.read(0x050001C0,32)==before
@@ -89,8 +63,8 @@ def run_context(core,rom,image,artifacts,mode,world_e):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--core',type=Path,default=Path('C:/RetroBat/emulators/retroarch/cores/mgba_libretro.dll'))
-    p.add_argument('--rom',type=Path,default=ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba')
+    p.add_argument('--core',type=Path,default=DEFAULT_CORE)
+    p.add_argument('--rom',type=Path,default=DEFAULT_OUTPUT)
     p.add_argument('--artifacts',type=Path,default=ROOT/'output/verification-menu-palette')
     args=p.parse_args()
     args.artifacts.mkdir(parents=True,exist_ok=True)
@@ -98,7 +72,7 @@ def main():
     result.unlink(missing_ok=True)
     image=args.rom.read_bytes()
     patch=ROOT/'community_patches/GBP SNES Palette Hack [djedditt] (v1.0).ips'
-    patched=apply_ips(image,patch.read_bytes())
+    patched=apply_ips(image,read_ips(patch))
     report={'passed':True,'rom_sha256':sha256(image),'gbp_patch_sha256':sha256(patch.read_bytes()),
             'memory_writes_by_test':0,'gbp_fixture_created_in_memory':True}
     for mode,fixture,name in ((2,image,'gba'),(0,patched,'gbp')):

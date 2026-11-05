@@ -1,13 +1,11 @@
 """Input-driven mGBA checks for every embedded card and all menu contexts."""
 import argparse
 import ctypes as C
-import struct
 import json
 from pathlib import Path
 
-from build_menu_rom import GROUP_CATALOG, decoded_card
-from build_rom import ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, ITEMS, sha256
-from verify_test_rom import Emulator, boot_to_file_select
+from build_rom import DEFAULT_OUTPUT, ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, sha256, GROUP_CATALOG, decoded_card
+from emulator import DEFAULT_CORE, Emulator, boot_to_map
 from menu_style import NativeFont, description_lines, DESCRIPTION_COLOR
 
 
@@ -233,14 +231,7 @@ def watch(e,group,index,back_state):
 def run_context(core,rom,artifacts,world_e=False,rom_bytes=None):
     e=Emulator(core,rom,artifacts,rom_bytes=rom_bytes)
     try:
-        boot_to_file_select(e)
-        if world_e:
-            for _ in range(3):e.press('Down',60)
-            e.press('A',600)
-        else:
-            for _ in range(2):e.press('A',300)
-        back_state=0x4C if world_e else 0x11
-        assert e.state()['state']==back_state
+        back_state=boot_to_map(e,world_e)
         baseline=snapshot(e)
         power_group=3 if world_e else 0
         demos=[]
@@ -323,8 +314,8 @@ def run_context(core,rom,artifacts,world_e=False,rom_bytes=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--core',type=Path,default=Path('C:/RetroBat/emulators/retroarch/cores/mgba_libretro.dll'))
-    p.add_argument('--rom',type=Path,default=ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba')
+    p.add_argument('--core',type=Path,default=DEFAULT_CORE)
+    p.add_argument('--rom',type=Path,default=DEFAULT_OUTPUT)
     p.add_argument('--artifacts',type=Path,default=ROOT/'output/verification-card-menu')
     args=p.parse_args()
     args.artifacts.mkdir(parents=True,exist_ok=True)

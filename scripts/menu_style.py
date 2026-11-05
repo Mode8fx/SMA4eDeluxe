@@ -108,18 +108,6 @@ def rgb(r,g,b):
     return (r>>3) | (g>>3)<<5 | (b>>3)<<10
 
 
-def rectangle(canvas,x0,y0,x1,y1,color):
-    for y in range(y0,y1):
-        for x in range(x0,x1):canvas[y][x] = color
-
-
-def rounded(canvas,x0,y0,x1,y1,color,radius=2):
-    rectangle(canvas,x0+radius,y0,x1-radius,y1,color)
-    rectangle(canvas,x0,y0+radius,x1,y1-radius,color)
-    if radius>1:
-        rectangle(canvas,x0+1,y0+1,x1-1,y1-1,color)
-
-
 def cursor(canvas,x,y):
     # Native-style outlined right-pointing triangle.
     for row in range(9):

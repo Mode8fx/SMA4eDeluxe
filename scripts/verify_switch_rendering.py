@@ -3,12 +3,11 @@ import argparse
 import json
 from pathlib import Path
 
-from build_menu_rom import GROUP_CATALOG
-from build_rom import ROOT, ROM_NAME, sha256
+from build_rom import DEFAULT_OUTPUT, ROOT, ROM_NAME, sha256, GROUP_CATALOG
 from menu_style import NativeFont, confirmation_bounds
 from verify_menu_rom import (open_menu, highlight, menu_state, confirmation_state,
                              assert_switch_label, power_prompt)
-from verify_test_rom import Emulator, boot_to_file_select
+from emulator import DEFAULT_CORE, Emulator, boot_to_map
 
 
 def strip_frame(e):
@@ -80,12 +79,7 @@ def check_phase(e,group,phase):
 def run_context(core,rom,artifacts,world_e):
     e=Emulator(core,rom,artifacts)
     try:
-        boot_to_file_select(e)
-        if world_e:
-            for _ in range(3):e.press('Down',60)
-            e.press('A',600)
-        else:
-            for _ in range(2):e.press('A',300)
+        back_state=boot_to_map(e,world_e)
         group=3 if world_e else 0
         e.press('R');e.press('Down');e.press('A',600)
         open_menu(e,group,hold=False)
@@ -104,7 +98,7 @@ def run_context(core,rom,artifacts,world_e):
         assert menu_state(e)==[1,0,1,group]
         frames+=check_phase(e,group,'on')
         e.press('B',120);e.press('B',600)
-        assert e.state()['state']==(0x4C if world_e else 0x11)
+        assert e.state()['state']==back_state
         return {'passed':True,'video_frames_checked':frames,
                 'checks':['Up/Down never clears labels','all nine final-page confirmations',
                           'ON/OFF/N/A outside popup preserved pixel-for-pixel',
@@ -115,8 +109,8 @@ def run_context(core,rom,artifacts,world_e):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--core',type=Path,default=Path('C:/RetroBat/emulators/retroarch/cores/mgba_libretro.dll'))
-    p.add_argument('--rom',type=Path,default=ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba')
+    p.add_argument('--core',type=Path,default=DEFAULT_CORE)
+    p.add_argument('--rom',type=Path,default=DEFAULT_OUTPUT)
     p.add_argument('--artifacts',type=Path,default=ROOT/'output/verification-switch-rendering')
     args=p.parse_args()
     args.artifacts.mkdir(parents=True,exist_ok=True)

@@ -1,277 +1,232 @@
-"""Build the shared menu by default; --direct-load retains the earlier fixed-card tests."""
-
+"""Embed every eReader_cards BIN in the shared card menu. Requires Python 3 and Clang."""
 import argparse
 import hashlib
 import json
+import re
+from copy import deepcopy
 from pathlib import Path
+import shutil
 import struct
+import subprocess
+
+from arm_object import link
+from menu_style import make_assets, MAX_NAME_LENGTH
 
 ROOT = Path(__file__).resolve().parents[1]
 ROM_NAME = "Super Mario Advance 4 - Super Mario Bros. 3 (USA) (Rev 1) (Virtual Console).gba"
-CARD_NAME = "[Japan] [21] 10-Item Set.bin"
-DEMO_NAME = "[Japan] [16] W8-Fortress_ Speed Stage.bin"
-DEMO_SHA256 = "34d4257ed813cba5acc5d6dae82585e2c3c3219221c3819b7d9739215697cd26"
-WORLD_E_DEMO_NAME = "[Japan] [2] Bombarded by Bob-ombs_ All Coins.bin"
-WORLD_E_DEMO_SHA256 = "f513f2cf16c11da26fe93b739cf11278f5fecbddaa85760717a252ba13cacd18"
 ROM_SHA256 = "c8db146071462572b3be6d2caefe453c584547515f9a2e3e75264cdf9243442e"
+DEFAULT_OUTPUT = ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba'
+PAYLOAD = 0x72  # Start of the native game payload within a decoded card envelope.
+CODE = 0x770000
+GROUPS = 0x774000
+ASSETS = 0x774100
 BASE = 0x08000000
-HOOK = 0x23EE90  # Communication substate 3: originally Sub080C1038+1.
-CODE = 0x7F0000
-CARD = 0x7F0200
-DEMO = 0x7F1000
-DEMO_TRANSFER = 0x7F2000  # Aligned game payload and zero padding for native copies.
-WORLD_E_DEMO = 0x7F3000
-WORLD_E_DEMO_TRANSFER = 0x7F4000
-PAYLOAD = 0x72  # This BIN's e-Reader application envelope precedes game data.
-ITEMS = bytes.fromhex("01 02 03 09 04 05 06 08 0e 0f")
+HOOK = 0x23EE90
 
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-class Thumb:
-    """Small ARM7TDMI Thumb emitter with checked PC-relative fixups and a listing."""
-
-    def __init__(self, base):
-        self.base = base
-        self.data = bytearray()
-        self.labels = {}
-        self.fixups = []
-        self.literals = {}
-        self.listing = []
-
-    def emit(self, word, description):
-        self.listing.append(f"{self.base + len(self.data):08X}: {word:04X}  {description}")
-        self.data += struct.pack("<H", word)
-
-    def label(self, name):
-        self.labels[name] = len(self.data)
-
-    def literal(self, reg, value):
-        name = f"literal_{value:08x}"
-        self.literals[name] = value
-        self.fixups.append((len(self.data), "ldr", name, reg))
-        self.emit(0x4800 | reg << 8, f"ldr r{reg}, =0x{value:08X}")
-
-    def branch(self, label, condition=None):
-        self.fixups.append((len(self.data), "b", label, condition))
-        self.emit(0xE000 if condition is None else 0xD000 | condition << 8, f"b{condition if condition is not None else ''} {label}")
-
-    def call(self, address):
-        self.literal(7, address | 1)
-        self.fixups.append((len(self.data), "bl", "call_r7", None))
-        self.emit(0xF000, "bl call_r7 (high)")
-        self.emit(0xF800, "bl call_r7 (low)")
-
-    def finish(self):
-        self.label("call_r7")
-        self.emit(0x4738, "bx r7")
-        while len(self.data) % 4:
-            self.emit(0x46C0, "nop / align literal pool")
-        for name, value in self.literals.items():
-            self.label(name)
-            self.data += struct.pack("<I", value)
-        for offset, kind, label, arg in self.fixups:
-            target = self.base + self.labels[label]
-            pc = self.base + offset + 4
-            if kind == "ldr":
-                delta = target - (pc & ~3)
-                assert delta % 4 == 0 and 0 <= delta <= 1020
-                struct.pack_into("<H", self.data, offset, 0x4800 | arg << 8 | delta // 4)
-            elif kind == "bl":
-                delta = target - pc
-                assert delta % 2 == 0 and -(1 << 22) <= delta < (1 << 22)
-                struct.pack_into("<HH", self.data, offset, 0xF000 | ((delta >> 12) & 0x7FF), 0xF800 | ((delta >> 1) & 0x7FF))
-            else:
-                delta = (target - pc) // 2
-                bits = 11 if arg is None else 8
-                assert -(1 << (bits - 1)) <= delta < (1 << (bits - 1))
-                opcode = 0xE000 if arg is None else 0xD000 | arg << 8
-                struct.pack_into("<H", self.data, offset, opcode | (delta & ((1 << bits) - 1)))
-        # Replace placeholder opcodes with the resolved instruction words.
-        self.listing = [line[:10] + f"{struct.unpack_from('<H', self.data, int(line[:8], 16) - self.base)[0]:04X}" + line[14:]
-                        for line in self.listing]
-        return bytes(self.data)
+def filename_metadata(filename):
+    match=re.fullmatch(r'\[(Japan|USA)\] \[(\d+|PR)\] (.+)\.bin',filename)
+    if not match:raise ValueError(f'Unsupported card filename: {filename}')
+    region,number,name=match.groups()
+    # Redundant region suffixes are packaging metadata, not part of the title.
+    name=re.sub(r' \((?:USA|Japan)\)$','',name)
+    number=int(number) if number!='PR' else 'PR'
+    if number!='PR' and not 1<=number<=999:raise ValueError('Filename IDs must fit the three-digit ID column')
+    name=name.replace('_',':')
+    return {'menu_id':number,'filename_id':number,'name':name[:MAX_NAME_LENGTH].rstrip(),
+            'region':'JPN' if region=='Japan' else 'USA'}
 
 
-def make_loader(sound_address, include_demo=False, include_world_e_demo=False):
-    t = Thumb(BASE + CODE)
-    t.emit(0xB5F0, "push {r4-r7, lr}")
-    t.emit(0xB081, "sub sp, #4 / window message argument")
-    t.emit(0x1C04, "mov r4, r0 / communication screen object")
-    t.literal(1, 0x0300378B)
-    t.emit(0x7809, "ldrb r1, [r1] / requested card category")
-    t.emit(0x22F0, "movs r2, #0xF0")
-    t.emit(0x4011, "ands r1, r2")
-    t.emit(0x2920, "cmp r1, #0x20 / Power-Up Card")
-    if include_demo:
-        t.branch("supported", 0)
-        t.emit(0x2910, "cmp r1, #0x10 / Demo Card")
-        t.branch("fallback", 1)
-        t.label("supported")
-        t.emit(0x1C0D, "mov r5, r1 / preserve requested category")
-    else:
-        t.branch("fallback", 1)
-    t.emit(0x6860, "ldr r0, [r4, #4] / upper dialogue")
-    t.emit(0x7A00, "ldrb r0, [r0, #8] / window animation state")
-    t.emit(0x2800, "cmp r0, #0")
-    t.branch("return", 1)
-    if include_demo:
-        t.emit(0x2D10, "cmp r5, #0x10")
-        t.branch("powerup", 1)
-        # Use the same persistent context bit as native card applicability checks.
-        # This remains valid while the communication screen is open.
-        t.literal(1, 0x03003DCF)
-        t.emit(0x7809, "ldrb r1, [r1] / communication context flags")
-        t.emit(0x2240, "movs r2, #0x40 / main game bit")
-        t.emit(0x4011, "ands r1, r2")
-        t.emit(0x2900, "cmp r1, #0")
-        t.branch("world_e_demo" if include_world_e_demo else "fallback", 0)
-        t.literal(6, BASE + DEMO_TRANSFER)
-        if include_world_e_demo:
-            t.branch("copy_demo")
-            t.label("world_e_demo")
-            t.literal(6, BASE + WORLD_E_DEMO_TRANSFER)
-        t.label("copy_demo")
-        # Native Demo code accesses these fixed buffers independently of r0.
-        for offset, destination in ((0, 0x02004000), (12, 0x020143D0)):
-            t.emit(0x1C30, "mov r0, r6 / context-selected Demo transfer record")
-            if offset:
-                t.emit(0x300C, "adds r0, #12 / skip game and Demo headers")
-            t.literal(1, destination)
-            t.literal(2, 0x200)  # CpuFastSet count is words: 0x800 bytes.
-            t.call(0x080E7590)
-        t.literal(0, 0x02004000)
-        t.branch("parse")
-        t.label("powerup")
-    t.literal(0, BASE + CARD + PAYLOAD)
-    t.label("parse")
-    t.call(0x080E3098)  # Native dispatcher -> item or demo parser.
-    t.literal(1, 0x0300376C)
-    t.emit(0x200C, "movs r0, #12 / same flag as successful link poll")
-    t.emit(0x7008, "strb r0, [r1]")
-    t.literal(1, 0x030079D8)
-    t.emit(0x2002, "movs r0, #2 / successful receive status")
-    t.emit(0x6008, "str r0, [r1]")
-    t.literal(1, 0x03002D7C)
-    t.emit(0x2006, "movs r0, #6 / success sound")
-    t.call(sound_address)
-    t.emit(0x6820, "ldr r0, [r4] / main dialogue")
-    t.emit(0x2104, "movs r1, #4 / received message")
-    t.emit(0x9100, "str r1, [sp]")
-    t.emit(0x2178, "movs r1, #120")
-    t.emit(0x2250, "movs r2, #80")
-    t.emit(0x2300, "movs r3, #0")
-    t.call(0x080C4BC0)
-    t.emit(0x6821, "ldr r1, [r4]")
-    t.emit(0x200B, "movs r0, #11 / native success window mode")
-    t.emit(0x7288, "strb r0, [r1, #10]")
-    t.literal(1, 0x1CE)
-    t.emit(0x1861, "adds r1, r4, r1")
-    t.emit(0x2000, "movs r0, #0")
-    t.emit(0x8008, "strh r0, [r1] / clear timer")
-    t.literal(1, 0x1E7)
-    t.emit(0x1861, "adds r1, r4, r1")
-    t.emit(0x2006, "movs r0, #6 / native validation and reward sequence")
-    t.emit(0x7008, "strb r0, [r1]")
-    t.branch("return")
-    t.label("fallback")
-    t.emit(0x1C20, "mov r0, r4")
-    t.call(0x080C1038)  # Keep unhandled categories on their original path.
-    t.label("return")
-    t.emit(0xB001, "add sp, #4")
-    t.emit(0xBCF0, "pop {r4-r7}")
-    t.emit(0xBC01, "pop {r0}")
-    t.emit(0x4700, "bx r0")
-    code = t.finish()
-    return code, t.listing
+def stage_order(card):
+    match=re.search(r'\] W([1-8])-(\d+|Fortress)',card['file'])
+    if not match:raise ValueError(f'Cannot determine Demo stage: {card["file"]}')
+    world,stage=match.groups()
+    world=int(world)
+    position={2:5,5:5,8:3}[world] if stage=='Fortress' else int(stage)*2
+    return world,position,card['filename_id'],card['region'],card['file']
 
 
-def build(rom_path, card_path, output, demo_path=None, world_e_demo_path=None):
-    original = rom_path.read_bytes()
-    card = card_path.read_bytes()
-    demo = demo_path.read_bytes() if demo_path else None
-    world_e_demo = world_e_demo_path.read_bytes() if world_e_demo_path else None
-    if sha256(original) != ROM_SHA256:
-        raise ValueError("Expected the unmodified USA Rev 1 Virtual Console ROM (see Notes.md).")
-    if len(card) != 0x840 or card[PAYLOAD:PAYLOAD + 22] != bytes.fromhex("1f 06 00 00 00 00 00 00 00 0a 00 00") + ITEMS:
-        raise ValueError("This experiment requires the supplied region-converted 10-Item Set BIN.")
-    if demo is not None and sha256(demo) != DEMO_SHA256:
-        raise ValueError("This experiment requires the supplied World 8-Fortress Speed Stage BIN.")
-    if world_e_demo is not None and (demo is None or sha256(world_e_demo) != WORLD_E_DEMO_SHA256):
-        raise ValueError("World-e Demo requires both the main-game Demo and the supplied Bombarded by Bob-ombs BIN.")
-    if original[HOOK:HOOK + 4] != struct.pack("<I", 0x080C1039):
-        raise ValueError("Unexpected communication dispatch table.")
-    code, listing = make_loader(0x080E4860, include_demo=demo is not None,
-                               include_world_e_demo=world_e_demo is not None)
-    transfer = demo[PAYLOAD:].ljust(0x80C, b"\0") if demo is not None else None
-    world_e_transfer = world_e_demo[PAYLOAD:].ljust(0x80C, b"\0") if world_e_demo is not None else None
-    end = DEMO_TRANSFER + len(transfer) if transfer is not None else CARD + len(card)
-    if world_e_transfer is not None:
-        end = WORLD_E_DEMO_TRANSFER + len(world_e_transfer)
-    if len(code) > CARD - CODE or any(original[CODE:end]):
-        raise ValueError("Injection area is not empty or loader overlaps the BIN.")
-    if output in (rom_path, card_path, demo_path, world_e_demo_path) or ROOT / "original_roms" in output.parents:
-        raise ValueError("Output must not overwrite an input or anything in original_roms.")
-    patched = bytearray(original)
-    patched[HOOK:HOOK + 4] = struct.pack("<I", BASE + CODE + 1)
-    patched[CODE:CODE + len(code)] = code
-    patched[CARD:CARD + len(card)] = card
-    if demo is not None:
-        patched[DEMO:DEMO + len(demo)] = demo
-        patched[DEMO_TRANSFER:DEMO_TRANSFER + len(transfer)] = transfer
-    if world_e_demo is not None:
-        patched[WORLD_E_DEMO:WORLD_E_DEMO + len(world_e_demo)] = world_e_demo
-        patched[WORLD_E_DEMO_TRANSFER:WORLD_E_DEMO_TRANSFER + len(world_e_transfer)] = world_e_transfer
-    output.parent.mkdir(parents=True, exist_ok=True)
+def prepare_catalog(catalog):
+    groups=deepcopy(catalog)
+    for group in groups:
+        if not 1<=len(group['cards'])<=100:raise ValueError('Each catalog must contain 1..100 cards')
+        group['cards']=[{**spec,**filename_metadata(spec['file'])} for spec in group['cards']]
+        if group['kind']=='demo' and group['context']==1:
+            group['cards'].sort(key=stage_order)
+            for index,card in enumerate(group['cards'],1):card['menu_id']=index
+        else:
+            group['cards'].sort(key=lambda card:(1000 if card['menu_id']=='PR' else card['menu_id'],card['region'],card['file']))
+    return groups
+
+
+def discover_catalog():
+    definitions=[('POWER-UP CARDS',('Power-Up','Switch')),
+                 ('DEMO CARDS - NORMAL',('Demo',)),
+                 ('DEMO CARDS - WORLD-E',('Demo (World-e)',))]
+    groups=[]
+    included=set()
+    for group_id,(title,folders) in enumerate(definitions):
+        cards=[]
+        for folder in folders:
+            for path in sorted((ROOT/'eReader_cards'/folder).rglob('*.bin')):
+                raw=path.read_bytes()
+                decoded=decoded_card(raw)
+                header=int.from_bytes(decoded[PAYLOAD:PAYLOAD+2],'little')
+                cards.append({'file':path.name,'folder':str(path.parent.relative_to(ROOT/'eReader_cards')),
+                              'sha256':sha256(raw),'id':header&511,'type':header>>9,
+                              'applicability':decoded[PAYLOAD+(11 if group_id==0 else 9)]})
+                included.add(path.resolve())
+        groups.append({'title':title,'folder':folders[0],'source_folders':list(folders),
+                       'kind':'power' if group_id==0 else 'demo','context':group_id,'cards':cards})
+    all_bins={p.resolve() for p in (ROOT/'eReader_cards').rglob('*') if p.is_file() and p.suffix.lower()=='.bin'}
+    if all_bins!=included:raise ValueError(f'Uncategorized BIN files: {sorted(str(p) for p in all_bins-included)}')
+    world_power=deepcopy(groups[0])
+    world_power.update(title='POWER-UP CARDS - WORLD-E',context=2)
+    groups[0]['context']=1
+    groups.append(world_power)
+    return prepare_catalog(groups)
+
+
+def decoded_card(raw):
+    if len(raw) == 0x840 and raw[0x1A:0x22] == b'NINTENDO': return raw
+    if len(raw) != 0xB60: raise ValueError('Unsupported card envelope')
+    # NEDC long strip: discard two header bytes per 104-byte block, then
+    # deinterleave 44 RS codewords, retaining each codeword's 48 data bytes.
+    # Source hashes are recorded and rechecked; these supplied strips are intact.
+    stream = b''.join(raw[i+2:i+104] for i in range(0,len(raw),104))[:64*44]
+    decoded = bytes(stream[row*44+col] for col in range(44) for row in range(48))
+    if decoded[0x1A:0x22] != b'NINTENDO': raise ValueError('Invalid raw card envelope')
+    return decoded
+
+
+GROUP_CATALOG=discover_catalog()
+
+
+def build(rom, output, compiler, catalog=None):
+    original = rom.read_bytes()
+    if sha256(original) != ROM_SHA256: raise ValueError('Expected original USA Rev 1 VC ROM')
+    if ROOT/'original_roms' in output.parents or ROOT/'eReader_cards' in output.parents or output==rom:
+        raise ValueError('Output must not overwrite source ROM/cards')
+    if any(original[CODE:]): raise ValueError('Reserved injection area is occupied')
+    output.parent.mkdir(parents=True,exist_ok=True)
+    work = output.parent/'build-menu'
+    work.mkdir(exist_ok=True)
+    patched=bytearray(original)
+    writes=[]
+    def put(offset,data):
+        for start,end in writes:
+            if offset<end and start<offset+len(data): raise ValueError('Overlapping patch data')
+        writes.append((offset,offset+len(data)))
+        patched[offset:offset+len(data)]=data
+    cursor=ASSETS
+    def allocate(data):
+        nonlocal cursor
+        cursor=(cursor+3)&~3
+        address=cursor
+        if cursor+len(data)>0x1000000:raise ValueError('Menu assets exceed 16 MiB ROM budget')
+        if cursor+len(data)>len(patched):patched.extend(bytes(0x1000000-len(patched)))
+        put(cursor,data)
+        cursor+=len(data)
+        return BASE+address
+    groups=[]
+    cache={}
+    for group_id,definition in enumerate(GROUP_CATALOG if catalog is None else prepare_catalog(catalog)):
+        cards=[]
+        descriptor=bytearray()
+        for spec in definition['cards']:
+            path=ROOT/'eReader_cards'/spec['folder']/spec['file']
+            raw=path.read_bytes()
+            if sha256(raw)!=spec['sha256']: raise ValueError(f'Unexpected card: {path}')
+            decoded=decoded_card(raw)
+            header=int.from_bytes(decoded[PAYLOAD:PAYLOAD+2],'little')
+            is_demo=definition['kind']=='demo'
+            if header&511!=spec['id'] or header>>9 not in ((4,) if is_demo else (2,3)):
+                raise ValueError('Unexpected game header')
+            applicability=decoded[PAYLOAD+(9 if is_demo else 11)]
+            if applicability not in (0,definition['context']) and spec['folder']!='Switch':
+                raise ValueError('Card applicability does not match catalog')
+            if path not in cache:
+                raw_address=allocate(raw)
+                canonical=raw_address if raw==decoded else allocate(decoded)
+                transfer=allocate(decoded[PAYLOAD:].ljust(0x80C,b'\0')) if is_demo else 0
+                cache[path]=(raw_address,canonical,transfer)
+            raw_address,canonical,transfer=cache[path]
+            descriptor+=struct.pack('<II',canonical+PAYLOAD,transfer)
+            cards.append({**spec,'path':str(path),'bin_rom_offset':hex(raw_address-BASE),
+                          'decoded_sha256':sha256(decoded),'payload_address':hex(canonical+PAYLOAD),
+                          'transfer_address':hex(transfer) if transfer else None})
+        groups.append({**definition,'cards':cards,'descriptor_address':allocate(descriptor)})
+    pages,palette,status_glyphs,style_info=make_assets(groups,original)
+    palette_address=allocate(palette)
+    status_address=allocate(status_glyphs)
+    for group_id,(group,group_pages) in enumerate(zip(groups,pages)):
+        page_descriptors=bytearray()
+        for page in group_pages:
+            page_descriptors+=struct.pack('<IIIII',allocate(page['font']),allocate(page['maps']),allocate(page['arrows']),allocate(page['status_base']),allocate(page['confirmation_fonts']))
+        pages_address=allocate(page_descriptors)
+        group['pages_address']=hex(pages_address)
+        group['page_count']=len(group_pages)
+        put(GROUPS+group_id*12,struct.pack('<III',group['descriptor_address'],len(group['cards']),pages_address))
+    (work/'menu_assets.h').write_text(f'#define MENU_PALETTE_ADDRESS 0x{palette_address:08X}\n#define MENU_GROUPS_ADDRESS 0x{BASE+GROUPS:08X}\n#define MENU_STATUS_ADDRESS 0x{status_address:08X}\n')
+    objects=[]
+    for name in ('card_menu','card_menu_view'):
+        obj=work/(name+'.o')
+        subprocess.run([compiler,'--target=arm-none-eabi','-mcpu=arm7tdmi','-mthumb','-Os',
+                        '-ffreestanding','-fno-builtin','-fno-jump-tables','-fno-unwind-tables',
+                        '-fno-asynchronous-unwind-tables','-Wall','-Wextra','-Werror','-I',str(work),
+                        '-c',str(ROOT/'scripts'/(name+'.c')),'-o',str(obj)],check=True)
+        objects.append(obj.read_bytes())
+    code,symbols=link(objects,BASE+CODE)
+    if len(code)>GROUPS-CODE: raise ValueError('Code exceeds reserved region')
+    put(CODE,code)
+    if original[HOOK:HOOK+4]!=struct.pack('<I',0x080C1039):raise ValueError('Unexpected dispatch table')
+    put(HOOK,struct.pack('<I',symbols['card_menu_tick']))
+    scene_pointer=struct.pack('<I',0x080C4AC9)
+    scene_hooks=[i for i in range(0,len(original)-3,4) if original[i:i+4]==scene_pointer]
+    if len(scene_hooks)!=1:raise ValueError('Expected one native communication-state dispatch pointer')
+    put(scene_hooks[0],struct.pack('<I',symbols['menu_scene_tick']))
+    # Native category sign text/frame use this shared Y coordinate on the entire
+    # communication screen, including its initial OK and subsequent dialogs.
+    if original[0xC48FC:0xC48FE]!=struct.pack('<H',0x2004):raise ValueError('Unexpected native category-banner Y coordinate')
+    put(0xC48FC,struct.pack('<H',0x2001))
+    # Extend the communication object from 0x1F4 to 0x208 bytes, including its clear.
+    if original[0xC06E4:0xC06E8]!=struct.pack('<HH',0x21FA,0x0049):raise ValueError('Unexpected allocation code')
+    put(0xC06E4,struct.pack('<HH',0x2182,0x0089))
+    instruction=struct.unpack_from('<H',original,0xC06F4)[0]
+    if instruction&0xFF00!=0x4A00:raise ValueError('Unexpected object clear instruction')
+    pool=((0xC06F4+4)&~3)+(instruction&255)*4
+    if original[pool:pool+4]!=struct.pack('<I',0x010000FA):raise ValueError('Unexpected object clear count')
+    put(pool,struct.pack('<I',0x01000104))
     output.write_bytes(patched)
-    report = {
-        "input_rom": str(rom_path), "input_sha256": sha256(original),
-        "card": str(card_path), "card_sha256": sha256(card),
-        "output_rom": str(output), "output_sha256": sha256(patched),
-        "rom_size": len(patched), "hook_rom_offset": hex(HOOK),
-        "code_rom_offset": hex(CODE), "code_size": len(code),
-        "bin_rom_offset": hex(CARD), "payload_bin_offset": hex(PAYLOAD),
-        "card_id": 31, "card_type": 3, "item_ids": list(ITEMS),
-    }
-    if demo is not None:
-        report["demo"] = {"card": str(demo_path), "sha256": sha256(demo),
-                          "bin_rom_offset": hex(DEMO), "transfer_rom_offset": hex(DEMO_TRANSFER),
-                          "transfer_size": len(transfer), "card_id": 16, "card_type": 4}
-        report["demo"]["context"] = "normal game only"
-    if world_e_demo is not None:
-        report["world_e_demo"] = {"card": str(world_e_demo_path), "sha256": sha256(world_e_demo),
-                                  "bin_rom_offset": hex(WORLD_E_DEMO),
-                                  "transfer_rom_offset": hex(WORLD_E_DEMO_TRANSFER),
-                                  "transfer_size": len(world_e_transfer), "card_id": 102,
-                                  "card_type": 4, "context": "World-e only"}
-    output.with_suffix(".json").write_text(json.dumps(report, indent=2) + "\n")
-    output.with_suffix(".loader.txt").write_text("\n".join(listing) + "\n")
-    assert rom_path.read_bytes() == original
-    print(json.dumps(report, indent=2))
+    report={'input_rom':str(rom),'input_sha256':sha256(original),'output_rom':str(output),
+            'output_sha256':sha256(patched),'rom_size':len(patched),'code_size':len(code),
+            'symbols':{k:hex(v) for k,v in symbols.items()},'groups':groups,'style':style_info,
+            'patch_regions':[[hex(a),hex(b)] for a,b in writes],
+            'source_card_count':len(cache),'menu_entry_count':sum(len(g['cards']) for g in groups),
+            'compiler':subprocess.run([compiler,'--version'],capture_output=True,text=True,check=True).stdout.splitlines()[0]}
+    output.with_suffix('.json').write_text(json.dumps(report,indent=2)+'\n')
+    assert rom.read_bytes()==original
+    print(json.dumps({'output':str(output),'sha256':report['output_sha256'],'code_size':len(code),'cards':len(cache)},indent=2))
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--rom", type=Path, default=ROOT / "original_roms" / ROM_NAME)
-    p.add_argument("--card", type=Path, default=ROOT / "eReader_cards" / "Power-Up" / CARD_NAME)
-    p.add_argument("--demo", type=Path, default=ROOT / "eReader_cards" / "Demo" / DEMO_NAME)
-    p.add_argument("--world-e-demo", type=Path, default=ROOT / "eReader_cards" / "Demo (World-e)" / WORLD_E_DEMO_NAME)
-    p.add_argument("--power-up-only", action="store_true", help="Reproduce the earlier item-only experiment")
-    p.add_argument("--output", type=Path)
-    args = p.parse_args()
-    output = args.output or ROOT / "output" / ("sma4-10-item-test.gba" if args.power_up_only else "sma4-card-tests.gba")
-    build(args.rom.resolve(), args.card.resolve(), output.resolve(),
-          None if args.power_up_only else args.demo.resolve(),
-          None if args.power_up_only else args.world_e_demo.resolve())
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--rom',type=Path,default=ROOT/'original_roms'/ROM_NAME)
+    p.add_argument('--output',type=Path,default=DEFAULT_OUTPUT)
+    p.add_argument('--compiler',default=shutil.which('clang'))
+    p.add_argument('--paging-test',action='store_true',help='Build the earlier separate 18-row paging fixture from the first two cards per group')
+    args=p.parse_args()
+    if not args.compiler:p.error('Clang is required; pass --compiler PATH')
+    catalog=None
+    if args.paging_test:
+        if args.output==DEFAULT_OUTPUT:args.output=ROOT/'output/sma4-card-menu-paging-test.gba'
+        catalog=deepcopy(GROUP_CATALOG)
+        for group in catalog:group['cards']=group['cards'][:2]*9
+    build(args.rom.resolve(),args.output.resolve(),args.compiler,catalog)
 
 
-if __name__ == "__main__":
-    import sys
-    if "--power-up-only" in sys.argv or "--direct-load" in sys.argv:
-        if "--direct-load" in sys.argv: sys.argv.remove("--direct-load")
-        main()
-    else:
-        from build_menu_rom import main as build_menu
-        build_menu()
+if __name__=='__main__':main()

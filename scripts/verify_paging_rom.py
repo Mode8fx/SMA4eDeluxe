@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from build_rom import ROOT, sha256
-from verify_test_rom import Emulator, boot_to_file_select
+from emulator import DEFAULT_CORE, Emulator, boot_to_map
 from verify_menu_rom import menu_state, confirmation_state, open_menu, confirm_selected, finish_power
 
 
@@ -131,12 +131,7 @@ def check_list(e,group,name):
 def run_context(core,rom,artifacts,world_e):
     e=Emulator(core,rom,artifacts)
     try:
-        boot_to_file_select(e)
-        if world_e:
-            for _ in range(3):e.press('Down',60)
-            e.press('A',600)
-        else:
-            for _ in range(2):e.press('A',300)
+        boot_to_map(e,world_e)
         result=[]
         for powerup,group in ((True,3 if world_e else 0),(False,2 if world_e else 1)):
             e.press('R')
@@ -150,7 +145,7 @@ def run_context(core,rom,artifacts,world_e):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--core',type=Path,default=Path('C:/RetroBat/emulators/retroarch/cores/mgba_libretro.dll'))
+    p.add_argument('--core',type=Path,default=DEFAULT_CORE)
     p.add_argument('--rom',type=Path,default=ROOT/'output/sma4-card-menu-paging-test.gba')
     p.add_argument('--artifacts',type=Path,default=ROOT/'output/verification-paging')
     args=p.parse_args()
