@@ -12,7 +12,7 @@ from pathlib import Path
 import struct
 import zlib
 
-from build_test_rom import (ITEMS, ROM_NAME, DEMO_NAME, WORLD_E_DEMO_NAME,
+from build_rom import (ITEMS, ROM_NAME, DEMO_NAME, WORLD_E_DEMO_NAME,
                             PAYLOAD, sha256, ROM_SHA256)
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from build_menu_rom import GROUP_CATALOG
-from build_test_rom import ROOT, ROM_NAME, sha256
+from build_rom import ROOT, ROM_NAME, sha256
 from menu_style import NativeFont, confirmation_bounds
 from verify_menu_rom import (open_menu, highlight, menu_state, confirmation_state,
                              assert_switch_label, power_prompt)
@@ -116,7 +116,7 @@ def run_context(core,rom,artifacts,world_e):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--core',type=Path,default=Path('C:/RetroBat/emulators/retroarch/cores/mgba_libretro.dll'))
-    p.add_argument('--rom',type=Path,default=ROOT/'output/sma4-card-menu-test.gba')
+    p.add_argument('--rom',type=Path,default=ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba')
     p.add_argument('--artifacts',type=Path,default=ROOT/'output/verification-switch-rendering')
     args=p.parse_args()
     args.artifacts.mkdir(parents=True,exist_ok=True)

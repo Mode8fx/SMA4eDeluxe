@@ -9,7 +9,7 @@ import struct
 import subprocess
 
 from arm_object import link
-from build_test_rom import ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, sha256
+from build_rom import ROOT, ROM_NAME, ROM_SHA256, PAYLOAD, sha256
 from menu_style import make_assets, MAX_NAME_LENGTH
 
 CODE = 0x770000
@@ -207,14 +207,14 @@ def build(rom, output, compiler, catalog=None):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--rom',type=Path,default=ROOT/'original_roms'/ROM_NAME)
-    p.add_argument('--output',type=Path,default=ROOT/'output/sma4-card-menu-test.gba')
+    p.add_argument('--output',type=Path,default=ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba')
     p.add_argument('--compiler',default=shutil.which('clang'))
     p.add_argument('--paging-test',action='store_true',help='Build the earlier separate 18-row paging fixture from the first two cards per group')
     args=p.parse_args()
     if not args.compiler:p.error('Clang is required; pass --compiler PATH')
     catalog=None
     if args.paging_test:
-        if args.output==ROOT/'output/sma4-card-menu-test.gba':args.output=ROOT/'output/sma4-card-menu-paging-test.gba'
+        if args.output==ROOT/'output/Super Mario Advance 4 - e-Deluxe.gba':args.output=ROOT/'output/sma4-card-menu-paging-test.gba'
         catalog=deepcopy(GROUP_CATALOG)
         for group in catalog:group['cards']=group['cards'][:2]*9
     build(args.rom.resolve(),args.output.resolve(),args.compiler,catalog)

@@ -1,13 +1,13 @@
 """Input-only integration checks for the separate 18-row paging fixture.
 
-Build it with: python scripts/build_test_rom.py --paging-test
+Build it with: python scripts/build_rom.py --paging-test
 It repeats the first two applicable cards per group; the normal output uses all BINs.
 """
 import argparse
 import json
 from pathlib import Path
 
-from build_test_rom import ROOT, sha256
+from build_rom import ROOT, sha256
 from verify_test_rom import Emulator, boot_to_file_select
 from verify_menu_rom import menu_state, confirmation_state, open_menu, confirm_selected, finish_power
 
