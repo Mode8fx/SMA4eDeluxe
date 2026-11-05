@@ -163,7 +163,7 @@ class NativeFrame:
         self.dialogue = lz77(rom,0x23F48C)
 
     def canvas(self):
-        # The original BG3 list frame, without its native footer's page numbers.
+        # Preserve the complete native frame; page_indicator replaces its count.
         canvas = [[0]*256 for _ in range(256)]
         for y in range(160):
             for x in range(240):
@@ -172,8 +172,18 @@ class NativeFrame:
                 xx = 7-x%8 if cell&0x400 else x%8
                 yy = 7-y%8 if cell&0x800 else y%8
                 canvas[y][x] = tile_pixel(self.graphics,cell&1023,xx,yy)
-        rectangle(canvas,192,113,225,123,15)
         return canvas
+
+    def page_indicator(self, canvas, page, pages):
+        # The native footer uses dedicated eight-pixel BG tiles, rather than
+        # the variable-width text font. Keep its blue ink and background pixels.
+        text=f'{page}/{pages}'
+        left=224-len(text)*8
+        for index,char in enumerate(text):
+            tile=0x246 if char=='/' else 0x236+int(char)
+            for y in range(8):
+                for x in range(8):
+                    canvas[112+y][left+index*8+x]=tile_pixel(self.graphics,tile,x,y)
 
     def sprite(self, canvas, x, y, tile, height=8, flip=False):
         # Exact original cursor / page-arrow sprite, mapped into our BG palette.
@@ -222,8 +232,7 @@ def list_canvas(group, selected, font, frame):
             x += width-squeeze
         font.draw(canvas,204,top,card['region'])
     frame.sprite(canvas,16,24+(selected%8)*11,0x5D)
-    count=f'{page+1}/{(len(group["cards"])+7)//8}'
-    font.draw(canvas,223-font.width(count,True),114,count,color=1,small=True)
+    frame.page_indicator(canvas,page+1,(len(group['cards'])+7)//8)
     return canvas
 
 
@@ -325,6 +334,9 @@ def make_assets(groups, rom):
         'font':'Original World-e variable-width font','font_rom_offset':'0x23abfc',
         'frame_graphics_rom_offset':'0x235c08','frame_map_rom_offset':'0x23d560',
         'arrow_graphics_rom_offset':'0x239b70','arrow_cycle_frames':22,
+        'page_indicator':{'graphics_rom_offset':'0x235c08','digit_tiles':'0x236..0x23f',
+                          'slash_tile':'0x246','tile_y':112,'right_edge':224,
+                          'color_index':13,'native_gba_gbp_colors':True},
         'confirmation_frame_graphics_rom_offset':'0x23f48c',
         'confirmation_includes_card_name':True,
         'confirmation_graphics':'Separate 16 KiB bank per card, shared by Yes/No',
