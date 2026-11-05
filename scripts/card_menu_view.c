@@ -76,7 +76,12 @@ void menu_view_open(MenuState *state, const CardGroup *group) {
     copy_words(TILE_VRAM, BACKUP, VIDEO_BACKUP_WORDS);
     copy_words(MAP_VRAM, MAP_BACKUP, 0x200);
     copy_words(PALETTE, PALETTE_BACKUP, 8);
-    copy_words((const void *)MENU_PALETTE_ADDRESS, PALETTE, 8);
+    /* Match the native Level Card UI: BG colours use table 0, OBJ arrow colours
+       use table 1. Both read the current mode, including optional GBP patches. */
+    const u16 *colors = (const u16 *)MENU_PALETTE_ADDRESS;
+    u32 i;
+    for (i=0; i<16; ++i)
+        ((volatile u16 *)PALETTE)[i] = ((u32 (*)(u32, u32))0x080079CD)(colors[i], i>=4 && i<=8);
     menu_view_update(state, group);
 }
 

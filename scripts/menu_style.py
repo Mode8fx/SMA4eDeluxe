@@ -134,6 +134,23 @@ COLORS = [0,0x7FFF,0,0x6F7B,0x1A5F,0x233F,0x27DF,0x001F,
           0x030E,rgb(0,64,224),0x4210,rgb(0,160,0),rgb(216,0,0),0x6DE5,0x7F72,0x7FB5]
 
 
+def native_palette(rom):
+    """Unadjusted colours for the same native conversion as the Level Card UI."""
+    frame=struct.unpack_from('<16H',rom,0x23CF68+12*32)
+    arrow=struct.unpack_from('<16H',rom,0x23BF10+13*32)
+    result=[0]*16
+    for index in (1,2,3,13,14,15):result[index]=frame[index]
+    for index in range(4,9):result[index]=arrow[index-1]
+    # Custom text colours were authored as displayed GBA colours. Find exact
+    # source components so normal GBA mode retains its existing appearance.
+    gba=struct.unpack_from('<32H',rom,0x121E3C+64)
+    for index in range(9,13):
+        result[index]=sum(gba.index((COLORS[index]>>shift)&31)<<shift for shift in (0,5,10))
+    assert [sum(gba[(color>>shift)&31]<<shift for shift in (0,5,10))
+            for color in result]==COLORS
+    return result
+
+
 def tile_pixel(graphics, tile, x, y):
     return (graphics[tile*32+y*4+x//2] >> (4*(x%2))) & 15
 
@@ -304,7 +321,7 @@ def make_assets(groups, rom):
                                 'status_base':b''.join(status_bases)})
             metrics.append(len(tiles))
         pages.append(group_pages)
-    return pages,struct.pack('<16H',*COLORS),bytes(status_glyphs),{
+    return pages,struct.pack('<16H',*native_palette(rom)),bytes(status_glyphs),{
         'font':'Original World-e variable-width font','font_rom_offset':'0x23abfc',
         'frame_graphics_rom_offset':'0x235c08','frame_map_rom_offset':'0x23d560',
         'arrow_graphics_rom_offset':'0x239b70','arrow_cycle_frames':22,
@@ -317,6 +334,10 @@ def make_assets(groups, rom):
         'tiles_per_page':metrics,'rows':8,'variants_per_card':3,
         'columns':['filename ID',f'filename name (up to {MAX_NAME_LENGTH} characters)','region (JPN/USA, black)'],
         'max_name_length':MAX_NAME_LENGTH,
+        'palette':{'conversion':'Native AdjustPalComponents (BG/custom table 0, arrow table 1)',
+                   'routine_address':'0x080079cd','mode_address':'0x0300378b',
+                   'frame_source_offset':'0x23d0e8','arrow_source_offset':'0x23c0b0',
+                   'gba_colors_preserved':True,'follows_gbp_mode':True},
         'switch_status':{'ON':'green','OFF':'red','N/A':'black','field_x':176,'field_right':200,
                          'persistent_map_tiles':True,'confirmation_occlusion':True,
                          'status_background_record_bytes':1060,'updates_during_vblank':True},

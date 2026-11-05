@@ -41,7 +41,7 @@ class Game(C.Structure):
 
 
 class Emulator:
-    def __init__(self, core, rom, artifacts):
+    def __init__(self, core, rom, artifacts, rom_bytes=None):
         self.artifacts = artifacts
         artifacts.mkdir(parents=True, exist_ok=True)
         self.directory = str(artifacts.resolve()).encode()
@@ -70,7 +70,7 @@ class Emulator:
         self.lib.retro_init()
         self.lib.retro_load_game.argtypes = [C.POINTER(Game)]
         self.lib.retro_load_game.restype = C.c_bool
-        self.rom_data = C.create_string_buffer(rom.read_bytes())
+        self.rom_data = C.create_string_buffer(rom.read_bytes() if rom_bytes is None else rom_bytes)
         self.rom_path = str(rom.resolve()).encode()
         game = Game(self.rom_path, C.cast(self.rom_data, C.c_void_p), len(self.rom_data) - 1, None)
         if not self.lib.retro_load_game(C.byref(game)):
