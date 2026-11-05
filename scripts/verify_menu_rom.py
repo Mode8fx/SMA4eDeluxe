@@ -230,8 +230,8 @@ def watch(e,group,index,back_state):
     return {'card':spec['file'],'id':spec['id'],'playback_frames':e.frames-start-90,'sublevels':sorted(levels)}
 
 
-def run_context(core,rom,artifacts,world_e=False):
-    e=Emulator(core,rom,artifacts)
+def run_context(core,rom,artifacts,world_e=False,rom_bytes=None):
+    e=Emulator(core,rom,artifacts,rom_bytes=rom_bytes)
     try:
         boot_to_file_select(e)
         if world_e:
