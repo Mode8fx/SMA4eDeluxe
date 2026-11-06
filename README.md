@@ -8,6 +8,8 @@ And since this hack uses the Virtual Console release as a base, all official lev
 
 The download can be found [here](https://github.com/Mode8fx/SMA4eDeluxe/tree/main/patches).
 
+![](screenshots/screenshot-1-v1.0.png)![](screenshots/screenshot-2-v1.0.png)![](screenshots/screenshot-3-v1.0.png)
+
 ## Known Compatible Patches
 
 Based on my testing, the following patches are also compatible with e-Deluxe (either individually or all together):
