@@ -34,7 +34,7 @@ def transition(e,button,name,unchanged=False):
 
 def check_phase(e,group,phase):
     cards=GROUP_CATALOG[group]['cards']
-    font=NativeFont((ROOT/'original_roms'/ROM_NAME).read_bytes())
+    font=NativeFont((ROOT/'original_rom'/ROM_NAME).read_bytes())
     frames=0
     highlight(e,26)
     # Both cursor directions on a page with OFF and N/A, and later ON on page 5.

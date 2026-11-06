@@ -109,7 +109,7 @@ GROUP_CATALOG=discover_catalog()
 def build(rom, output, compiler, catalog=None):
     original = rom.read_bytes()
     if sha256(original) != ROM_SHA256: raise ValueError('Expected original USA Rev 1 VC ROM')
-    if ROOT/'original_roms' in output.parents or ROOT/'eReader_cards' in output.parents or output==rom:
+    if ROOT/'original_rom' in output.parents or ROOT/'eReader_cards' in output.parents or output==rom:
         raise ValueError('Output must not overwrite source ROM/cards')
     if any(original[CODE:]): raise ValueError('Reserved injection area is occupied')
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -215,7 +215,7 @@ def build(rom, output, compiler, catalog=None):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--rom',type=Path,default=ROOT/'original_roms'/ROM_NAME)
+    p.add_argument('--rom',type=Path,default=ROOT/'original_rom'/ROM_NAME)
     p.add_argument('--output',type=Path,default=DEFAULT_OUTPUT)
     p.add_argument('--compiler',default=shutil.which('clang'))
     p.add_argument('--paging-test',action='store_true',help='Build the earlier separate 18-row paging fixture from the first two cards per group')

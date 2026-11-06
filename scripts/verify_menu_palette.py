@@ -23,7 +23,7 @@ def adjusted_palette(original,mode):
 def run_context(core,rom,image,artifacts,mode,world_e):
     e=Emulator(core,rom,artifacts,rom_bytes=image)
     try:
-        original=(ROOT/'original_roms'/ROM_NAME).read_bytes()
+        original=(ROOT/'original_rom'/ROM_NAME).read_bytes()
         expected=adjusted_palette(original,mode)
         if mode==2:assert expected==COLORS, 'Normal GBA appearance changed'
         boot_to_map(e,world_e)

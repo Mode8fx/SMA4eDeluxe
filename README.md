@@ -4,7 +4,9 @@ _e-Deluxe_ is a hack of Super Mario Advance 4 that builds all officially-release
 
 Opening the Power-Up Card or Demo Card screen will lead to a menu where you can select any card to activate immediately without needing an e-Reader or second GBA. Cards whose effects aren't self-explanatory, such as the switches, also have in-game descriptions.
 
-And since this hack is built off the Virtual Console release, all official level cards are already built-in, but the ability to scan additional level cards still exists.
+And since this hack uses the Virtual Console release as a base, all official level cards are already built-in, but the ability to scan additional level cards still exists.
+
+The download can be found [here](https://github.com/Mode8fx/SMA4eDeluxe/tree/main/patches).
 
 ## Building
 
@@ -14,17 +16,17 @@ With Python 3 and Clang installed, run from the repository root:
 python -B scripts/build_rom.py
 ```
 
-This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_roms` and cards in `eReader_cards`.
+This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_rom` and cards in `eReader_cards`.
 
 ## Known Compatible Patches
 
-Based on my testing, the following patches are also compatible with this hack (either individually or all together):
+Based on my testing, the following patches are also compatible with e-Deluxe (either individually or all together):
 - [Bug fixes](https://www.romhacking.net/hacks/6153/) by Mario_GMD
 - [GBP/SNES Palette Hack](https://www.romhacking.net/hacks/6227/) by djedditt
 - [Cartridge Rumble](https://www.romhacking.net/hacks/6234/) by djedditt
 - [Voice Removal](https://www.romhacking.net/hacks/2566/) by mangaman3000
 
-Others may also be compatible, but I didn't test them.
+Others may also be compatible, but I didn't test them. Apply your desired optional patch(es) after the main e-Deluxe patch.
 
 ## Notes
 - This patch is designed for the `(USA) (Rev 1) (Virtual Console)` ROM. The non-Virtual Console variant and other regions are untested.

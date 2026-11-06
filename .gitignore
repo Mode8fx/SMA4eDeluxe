@@ -180,6 +180,6 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /eReader_cards
-/original_roms
+/original_rom
 /disassemblies
 /output

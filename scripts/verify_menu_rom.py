@@ -31,7 +31,7 @@ def open_menu(e, group, hold=True):
 
 def assert_switch_label(e,index,label):
     """Read the rendered pixels, including colour, rather than only flag RAM."""
-    font=NativeFont((ROOT/'original_roms'/ROM_NAME).read_bytes())
+    font=NativeFont((ROOT/'original_rom'/ROM_NAME).read_bytes())
     color={'ON':11,'OFF':12,'N/A':2}[label]
     expected=[[0]*24 for _ in range(8)]
     font.draw(expected,24-font.width(label),0,label,color=color)
@@ -54,7 +54,7 @@ def highlight(e,index):
 
 def assert_confirmation_description(e,card):
     """Check displayed tile pixels and blue palette after the bank switch."""
-    font=NativeFont((ROOT/'original_roms'/ROM_NAME).read_bytes())
+    font=NativeFont((ROOT/'original_rom'/ROM_NAME).read_bytes())
     lines=description_lines(card,font)
     top=44-(11*len(lines))//2
     sx=(e.number(0x03003750,2)>>3)&31
@@ -321,7 +321,7 @@ def main():
     args.artifacts.mkdir(parents=True,exist_ok=True)
     result_path=args.artifacts/'result.json'
     result_path.unlink(missing_ok=True)
-    original=ROOT/'original_roms'/ROM_NAME
+    original=ROOT/'original_rom'/ROM_NAME
     assert sha256(original.read_bytes())==ROM_SHA256
     report={'passed':True,'rom_sha256':sha256(args.rom.read_bytes()),
             'normal':run_context(args.core.resolve(),args.rom.resolve(),args.artifacts.resolve()/'normal'),

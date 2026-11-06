@@ -24,7 +24,7 @@ PATCHES=(('bugs','Bug fixes [Mario_GMD] (v1.0B).ips'),
 
 def static_checks(image,manifest,patches):
     assert sha256(image)==manifest['output_sha256']
-    original=(ROOT/'original_roms'/ROM_NAME).read_bytes()
+    original=(ROOT/'original_rom'/ROM_NAME).read_bytes()
     assert sha256(original)==ROM_SHA256
     ranges=[(int(a,16),int(b,16)) for a,b in manifest['patch_regions']]
     writes={}
@@ -65,7 +65,7 @@ def matrix_context(core,rom,image,artifacts,world_e,mode):
         assert e.number(0x0300378B)&6==mode
         baseline=snapshot(e)
         power=3 if world_e else 0
-        expected=struct.pack('<16H',*adjusted_palette((ROOT/'original_roms'/ROM_NAME).read_bytes(),mode))
+        expected=struct.pack('<16H',*adjusted_palette((ROOT/'original_rom'/ROM_NAME).read_bytes(),mode))
         for group in (power,2 if world_e else 1):
             restore(e,baseline);e.press('R')
             if group==power:e.press('Down')
