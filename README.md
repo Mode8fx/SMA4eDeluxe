@@ -8,16 +8,6 @@ And since this hack uses the Virtual Console release as a base, all official lev
 
 The download can be found [here](https://github.com/Mode8fx/SMA4eDeluxe/tree/main/patches).
 
-## Building
-
-With Python 3 and Clang installed, run from the repository root:
-
-```powershell
-python -B scripts/build_rom.py
-```
-
-This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_rom` and cards in `eReader_cards` (both of which need to be created in the repository root).
-
 ## Known Compatible Patches
 
 Based on my testing, the following patches are also compatible with e-Deluxe (either individually or all together):
@@ -27,6 +17,16 @@ Based on my testing, the following patches are also compatible with e-Deluxe (ei
 - [Voice Removal](https://www.romhacking.net/hacks/2566/) by mangaman3000
 
 Others may also be compatible, but I didn't test them. Apply your desired optional patch(es) after the main e-Deluxe patch.
+
+## Building
+
+With Python 3 and Clang installed, run from the repository root:
+
+```powershell
+python -B scripts/build_rom.py
+```
+
+This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_rom` and cards in `eReader_cards` (both of which need to be created in the repository root).
 
 ## Notes
 - This patch is designed for the `(USA) (Rev 1) (Virtual Console)` ROM. The non-Virtual Console variant and other regions are untested.
