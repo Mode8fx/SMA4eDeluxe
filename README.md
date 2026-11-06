@@ -16,7 +16,7 @@ With Python 3 and Clang installed, run from the repository root:
 python -B scripts/build_rom.py
 ```
 
-This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_rom` and cards in `eReader_cards`.
+This creates `output/Super Mario Advance 4 - e-Deluxe.gba` using the ROM in `original_rom` and cards in `eReader_cards` (both of which need to be created in the repository root).
 
 ## Known Compatible Patches
 
